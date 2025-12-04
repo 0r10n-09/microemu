@@ -1,84 +1,83 @@
-# MicroComputer Emulator  
-A lightweight fantasy-computer emulator with a custom instruction set, simple graphics, and a C-based program generator system.
+# MicroComputer Emulator
 
-This README explains:
+A lightweight fantasy-computer emulator with a custom instruction set, text-based graphics display, and a built-in command-line OS. Write programs in C that compile to custom bytecode and run them in a virtual environment with 64KB of RAM.
 
-- How to compile the emulator  
-- How to write programs for it  
-- How the CPU works  
-- Example programs  
-- A full template you can copy to start your own projects  
+![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
+
+## Features
+
+- 🖥️ **Virtual CPU** with custom instruction set
+- 📺 **80×25 character display** with GUI window
+- 💾 **64KB RAM** with 256-byte stack
+- 🗂️ **Virtual filesystem** for program storage
+- 🐚 **Built-in shell** with Unix-like commands
+- 🔧 **Cross-platform** (Windows & Linux)
+- 📝 **Program generator** system using C
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Using the Shell](#using-the-shell)
+- [Programming Guide](#programming-guide)
+- [CPU Architecture](#cpu-architecture)
+- [Example Programs](#example-programs)
+- [API Reference](#api-reference)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-# 📦 Compilation Instructions
+## Installation
 
-These are the commands for building the **microemu** emulator itself.
+### Prerequisites
 
-### **Linux**
+**Linux:**
+- GCC compiler
+- X11 development libraries
+- pthread library
+
+```bash
+sudo apt-get install build-essential libx11-dev
+```
+
+**Windows:**
+- MinGW-w64 or similar GCC toolchain
+- Windows SDK (included with MinGW)
+
+### Build Instructions
+
+**Linux:**
 ```bash
 gcc -o microemu microemu.c -lX11 -lpthread -lm
+./microemu
 ```
 
-### **Windows (MinGW)**
+**Windows (MinGW):**
 ```bash
 gcc -o microemu.exe microemu.c -lws2_32 -lgdi32 -lpthread
+microemu.exe
 ```
 
----
-
-# 🧰 Programming Guide
-
-Programs for the MicroComputer emulator are written in **C** and compiled into **.bin** files that the emulator can run.
+On first run, the emulator creates a `./fs/` directory for storing programs.
 
 ---
 
-# 🚀 Quick Start
+## Quick Start
 
-1. Copy `makedemo.c` (or the template at the end of this README)
-2. Write program logic using the provided helper functions
-3. Compile your generator program:
-   ```bash
-   gcc -o myprogram myprogram.c
-   ```
-4. Run it to generate a `.bin`:
-   ```bash
-   ./myprogram
-   ```
-5. Move the `.bin` file to the `fs/` directory of your emulator
-6. Run it inside the emulator:
-   ```
-   run myfile.bin
-   ```
+### 1. Start the Emulator
 
----
+```bash
+./microemu
+```
 
-# 🧠 CPU Overview
+A graphical window will appear with the MicroOS shell prompt.
 
-## **Available Opcodes**
+### 2. Create Your First Program
 
-| Opcode | Name | Description |
-|--------|------|-------------|
-| `0x00` | HALT | Stop program execution |
-| `0x01` | PRINT_CHAR | Print a single character |
-| `0x02` | PRINT_STR | Print a null-terminated string |
-| `0x04` | CLEAR_SCREEN | Clear the display |
-| `0x20` | SLEEP_MS | Delay execution by N ms (2-byte argument) |
-
----
-
-# 🗄 Memory Layout
-
-- **Total RAM:** 64KB  
-- **Stack size:** 256 bytes  
-- Programs load at `0x0000`  
-- Program counter starts at `0x0000`
-
----
-
-# 📝 Writing Your First Program
-
-### **Step 1 — Basic Template**
+Create `hello.c`:
 
 ```c
 #include <stdio.h>
@@ -86,10 +85,7 @@ Programs for the MicroComputer emulator are written in **C** and compiled into *
 #include <stdint.h>
 
 #define OP_HALT         0x00
-#define OP_PRINT_CHAR   0x01
 #define OP_PRINT_STR    0x02
-#define OP_CLEAR_SCREEN 0x04
-#define OP_SLEEP_MS     0x20
 
 typedef struct {
     uint8_t *data;
@@ -111,18 +107,153 @@ void emit_byte(Program *p, uint8_t byte) {
     p->data[p->size++] = byte;
 }
 
+void emit_string(Program *p, const char *str) {
+    while (*str) emit_byte(p, *str++);
+    emit_byte(p, 0);
+}
+
+void print_str(Program *p, const char *str) {
+    emit_byte(p, OP_PRINT_STR);
+    emit_string(p, str);
+}
+
+void halt(Program *p) {
+    emit_byte(p, OP_HALT);
+}
+
+int main() {
+    Program prog;
+    init_program(&prog);
+    
+    print_str(&prog, "Hello, MicroComputer!\n");
+    halt(&prog);
+    
+    FILE *f = fopen("hello.bin", "wb");
+    fwrite(prog.data, 1, prog.size, f);
+    fclose(f);
+    
+    free(prog.data);
+    return 0;
+}
+```
+
+### 3. Compile and Run
+
+```bash
+# Compile the program generator
+gcc -o hello hello.c
+
+# Generate the bytecode
+./hello
+
+# Move to emulator filesystem
+mv hello.bin fs/
+
+# In the emulator window, type:
+run hello.bin
+```
+
+---
+
+## Using the Shell
+
+The MicroOS shell provides Unix-like commands for file management and system control.
+
+### Available Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `help` | Display all commands | `help` |
+| `clear` | Clear the screen | `clear` |
+| `ls` | List files | `ls` |
+| `cat <file>` | Display file contents | `cat readme.txt` |
+| `rm <file>` | Delete a file | `rm old.bin` |
+| `cp <src> <dst>` | Copy a file | `cp prog.bin backup.bin` |
+| `mv <src> <dst>` | Move/rename a file | `mv old.bin new.bin` |
+| `echo <text>` | Print text | `echo Hello World` |
+| `date` | Show current date/time | `date` |
+| `uptime` | Show system uptime | `uptime` |
+| `meminfo` | Display memory info | `meminfo` |
+| `run <file>` | Execute a program | `run demo.bin` |
+| `hexdump <file>` | Hex dump of file | `hexdump prog.bin` |
+| `history` | Show command history | `history` |
+| `exit` | Exit the emulator | `exit` |
+
+---
+
+## Programming Guide
+
+### Program Structure
+
+Programs are created by writing C code that generates bytecode using helper functions. The general workflow is:
+
+1. Initialize a `Program` struct
+2. Emit opcodes and data using helper functions
+3. Write the bytecode to a `.bin` file
+4. Copy the `.bin` to the `fs/` directory
+5. Run it in the emulator
+
+### Core Program Template
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+// Opcode definitions
+#define OP_HALT         0x00
+#define OP_PRINT_CHAR   0x01
+#define OP_PRINT_STR    0x02
+#define OP_CLEAR_SCREEN 0x04
+#define OP_SLEEP_MS     0x20
+
+// Program structure
+typedef struct {
+    uint8_t *data;
+    size_t size;
+    size_t capacity;
+} Program;
+
+// Initialize program buffer
+void init_program(Program *p) {
+    p->capacity = 1024;
+    p->data = malloc(p->capacity);
+    p->size = 0;
+}
+
+// Emit a single byte
+void emit_byte(Program *p, uint8_t byte) {
+    if (p->size >= p->capacity) {
+        p->capacity *= 2;
+        p->data = realloc(p->data, p->capacity);
+    }
+    p->data[p->size++] = byte;
+}
+
+// Emit a 16-bit word (little-endian)
 void emit_word(Program *p, uint16_t word) {
     emit_byte(p, word & 0xFF);
     emit_byte(p, (word >> 8) & 0xFF);
 }
 
+// Emit a null-terminated string
 void emit_string(Program *p, const char *str) {
     while (*str) emit_byte(p, *str++);
     emit_byte(p, 0);
 }
+
+// Save program to file
+void save_program(Program *p, const char *filename) {
+    FILE *f = fopen(filename, "wb");
+    if (f) {
+        fwrite(p->data, 1, p->size, f);
+        fclose(f);
+    }
+    free(p->data);
+}
 ```
 
-### **Step 2 — Helper Functions**
+### Helper Functions
 
 ```c
 void clear_screen(Program *p) {
@@ -151,56 +282,256 @@ void halt(Program *p) {
 
 ---
 
-# 🧪 Example Programs
+## CPU Architecture
 
-(Examples omitted here for brevity in file; full examples were included in chat.)
+### Specifications
 
----
+- **Memory:** 64KB RAM (65,536 bytes)
+- **Stack:** 256 bytes
+- **Registers:** 8 general-purpose 16-bit registers
+- **Program Counter:** 16-bit
+- **Stack Pointer:** 16-bit
+- **Display:** 80×25 character text mode
 
-# 🧭 Tips and Best Practices
+### Instruction Set
 
-- **Always end with `halt()`**  
-- Use `sleep_ms()` to control animation speed  
-- Clear the screen before drawing each animation frame  
-- Use `snprintf()` for advanced formatted messages  
-- Test your generator program before copying `.bin` files
+| Opcode | Mnemonic | Arguments | Description |
+|--------|----------|-----------|-------------|
+| `0x00` | HALT | None | Stop execution |
+| `0x01` | PRINT_CHAR | 1 byte | Print single character |
+| `0x02` | PRINT_STR | String + null | Print null-terminated string |
+| `0x04` | CLEAR_SCREEN | None | Clear display |
+| `0x20` | SLEEP_MS | 2 bytes (little-endian) | Sleep for N milliseconds |
 
----
+### Memory Map
 
-# 🔧 Debugging
-
-| Problem | Fix |
-|--------|------|
-| Program crashes | You forgot `halt()` |
-| Nothing shows on screen | You didn’t call `print_str()` or `print_char()` |
-| Emulator won't load file | `.bin` not in `fs/` |
-| Text is corrupted | Missing null terminators |
-| Timing feels wrong | Adjust `sleep_ms()` |
-
----
-
-# 🗃 File Naming Rules
-
-- Lowercase only  
-- Use `.bin` extension for final output  
-- Avoid long names (limit < 60 chars)  
-- No spaces  
+```
+0x0000 - 0xFFFF : RAM (64KB)
+  0x0000 - ...  : Program code/data
+  Stack grows from top
+```
 
 ---
 
-# ❓ Getting Help
+## Example Programs
 
-If you're stuck:
+### Example 1: Hello World
 
-1. Make sure your program compiles with no warnings  
-2. Ensure your `.bin` exists  
-3. Place it inside `fs/`  
-4. Verify emulator runs other known-good programs  
-5. Inspect binaries using:
+```c
+int main() {
+    Program prog;
+    init_program(&prog);
+    
+    print_str(&prog, "Hello, World!\n");
+    halt(&prog);
+    
+    save_program(&prog, "hello.bin");
+    return 0;
+}
+```
+
+### Example 2: Countdown Timer
+
+```c
+int main() {
+    Program prog;
+    init_program(&prog);
+    
+    for (int i = 10; i >= 0; i--) {
+        clear_screen(&prog);
+        
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Countdown: %d\n", i);
+        print_str(&prog, buf);
+        
+        sleep_ms(&prog, 1000);
+    }
+    
+    print_str(&prog, "\nBlastoff!\n");
+    halt(&prog);
+    
+    save_program(&prog, "countdown.bin");
+    return 0;
+}
+```
+
+### Example 3: Text Animation
+
+```c
+int main() {
+    Program prog;
+    init_program(&prog);
+    
+    const char *frames[] = {
+        "  O  \n /|\\ \n / \\ ",
+        " \\O/ \n  |  \n / \\ ",
+        "  O  \n /|\\ \n / \\ ",
+        " /O\\ \n  |  \n / \\ "
+    };
+    
+    for (int loop = 0; loop < 10; loop++) {
+        for (int i = 0; i < 4; i++) {
+            clear_screen(&prog);
+            print_str(&prog, "Dancing Stick Figure\n\n");
+            print_str(&prog, frames[i]);
+            sleep_ms(&prog, 200);
+        }
+    }
+    
+    halt(&prog);
+    save_program(&prog, "dance.bin");
+    return 0;
+}
+```
+
+---
+
+## API Reference
+
+### Program Management
+
+#### `void init_program(Program *p)`
+Initializes a program buffer with 1KB initial capacity.
+
+#### `void emit_byte(Program *p, uint8_t byte)`
+Appends a single byte to the program. Automatically grows buffer if needed.
+
+#### `void emit_word(Program *p, uint16_t word)`
+Appends a 16-bit value in little-endian format.
+
+#### `void emit_string(Program *p, const char *str)`
+Appends a null-terminated string (including the null byte).
+
+#### `void save_program(Program *p, const char *filename)`
+Writes the program buffer to a file and frees memory.
+
+### Display Functions
+
+#### `void clear_screen(Program *p)`
+Clears the entire display and resets cursor to top-left.
+
+#### `void print_str(Program *p, const char *str)`
+Prints a string at the current cursor position. Supports `\n` for newlines.
+
+#### `void print_char(Program *p, char c)`
+Prints a single character at the current cursor position.
+
+### Timing
+
+#### `void sleep_ms(Program *p, uint16_t ms)`
+Pauses execution for the specified number of milliseconds (0-65535).
+
+### Control Flow
+
+#### `void halt(Program *p)`
+Stops program execution. **Always required at the end of your program.**
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+| Problem | Solution |
+|---------|----------|
+| **Program doesn't stop** | Add `halt()` at the end |
+| **Nothing displays** | Ensure you're using `print_str()` or `print_char()` |
+| **File not found in emulator** | Move `.bin` file to `fs/` directory |
+| **Garbled text** | Check for missing null terminators in strings |
+| **Window not updating (Windows)** | Latest patch fixes this - recompile emulator |
+| **Compilation errors** | Ensure all helper functions are defined |
+
+### Debug Tips
+
+1. **Inspect bytecode:**
    ```bash
-   hexdump -C file.bin
+   hexdump -C myprogram.bin
+   ```
+
+2. **Test generator compilation:**
+   ```bash
+   gcc -Wall -Wextra -o test test.c
+   ```
+
+3. **Check file size:**
+   ```bash
+   ls -lh fs/
+   ```
+
+4. **Use `hexdump` command in emulator:**
+   ```
+   hexdump myprogram.bin
    ```
 
 ---
 
-Happy programming! 🚀
+## Best Practices
+
+- ✅ Always end programs with `halt()`
+- ✅ Use `clear_screen()` before each animation frame
+- ✅ Keep filenames short and lowercase
+- ✅ Use `.bin` extension for all programs
+- ✅ Test your generator program before copying to `fs/`
+- ✅ Add delays with `sleep_ms()` for animations
+- ✅ Use `snprintf()` for formatted output
+
+---
+
+## File Naming Conventions
+
+- Use lowercase letters only
+- No spaces (use underscores or hyphens)
+- Must end with `.bin` extension
+- Keep names under 60 characters
+- Examples: `hello.bin`, `countdown.bin`, `demo_game.bin`
+
+---
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit pull requests or open issues for:
+
+- New opcodes or CPU features
+- Additional example programs
+- Documentation improvements
+- Bug fixes
+- Cross-platform compatibility enhancements
+
+---
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+### GPL-3.0 Summary
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+---
+
+## Roadmap
+
+Future enhancements planned:
+
+- [ ] Pixel graphics mode
+- [ ] Sound/beep support
+- [ ] File I/O operations
+- [ ] Keyboard input opcodes
+- [ ] Arithmetic and logic operations
+- [ ] Conditional jumps and loops
+- [ ] Register operations
+- [ ] Memory read/write opcodes
+
+---
+
+## Acknowledgments
+
+Inspired by fantasy consoles like PICO-8 and TIC-80, designed as a learning platform for low-level programming and computer architecture concepts.
+
+---
+
+**Happy coding!** 🚀
+
+For questions or support, please open an issue on GitHub.
