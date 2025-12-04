@@ -9,9 +9,15 @@ A lightweight fantasy-computer emulator with a custom instruction set, text-base
 
 - 🖥️ **Virtual CPU** with custom instruction set
 - 📺 **80×25 character display** with GUI window
+- 🎨 **320×200 pixel graphics mode** for simple graphics
+- 🔊 **Sound support** with beep/tone generation
 - 💾 **64KB RAM** with 256-byte stack
+- 🎮 **8 general-purpose registers** for computation
+- 🔀 **Conditional jumps** and flow control
+- ⌨️ **Keyboard input** opcodes
 - 🗂️ **Virtual filesystem** for program storage
 - 🐚 **Built-in shell** with Unix-like commands
+- 🎬 **Boot and loading animations**
 - 🔧 **Cross-platform** (Windows & Linux)
 - 📝 **Program generator** system using C
 
@@ -44,7 +50,7 @@ sudo apt-get install build-essential libx11-dev
 ```
 
 **Windows:**
-- MinGW-w64 (MSYS2)
+- MinGW-w64 or similar GCC toolchain
 - Windows SDK (included with MinGW)
 
 ### Build Instructions
@@ -301,7 +307,29 @@ void halt(Program *p) {
 | `0x01` | PRINT_CHAR | 1 byte | Print single character |
 | `0x02` | PRINT_STR | String + null | Print null-terminated string |
 | `0x04` | CLEAR_SCREEN | None | Clear display |
-| `0x20` | SLEEP_MS | 2 bytes (little-endian) | Sleep for N milliseconds |
+| `0x20` | SLEEP_MS | 2 bytes (LE) | Sleep for N milliseconds |
+| `0x21` | BEEP | 4 bytes (freq, duration) | Play beep sound |
+| `0x30` | SET_PIXEL | 5 bytes (x, y, value) | Set pixel in graphics mode |
+| `0x31` | CLEAR_PIXELS | None | Clear pixel buffer |
+| `0x40` | LOAD_REG | 3 bytes (reg, value) | Load immediate to register |
+| `0x41` | STORE_REG | 3 bytes (reg, addr) | Store register to memory |
+| `0x50` | ADD | 3 bytes (dst, src1, src2) | Add registers |
+| `0x51` | SUB | 3 bytes (dst, src1, src2) | Subtract registers |
+| `0x52` | MUL | 3 bytes (dst, src1, src2) | Multiply registers |
+| `0x53` | DIV | 3 bytes (dst, src1, src2) | Divide registers |
+| `0x54` | AND | 3 bytes (dst, src1, src2) | Bitwise AND |
+| `0x55` | OR | 3 bytes (dst, src1, src2) | Bitwise OR |
+| `0x56` | XOR | 3 bytes (dst, src1, src2) | Bitwise XOR |
+| `0x57` | NOT | 2 bytes (dst, src) | Bitwise NOT |
+| `0x58` | CMP | 2 bytes (src1, src2) | Compare registers |
+| `0x60` | JMP | 2 bytes (addr) | Unconditional jump |
+| `0x61` | JZ | 2 bytes (addr) | Jump if zero |
+| `0x62` | JNZ | 2 bytes (addr) | Jump if not zero |
+| `0x63` | JG | 2 bytes (addr) | Jump if greater |
+| `0x64` | JL | 2 bytes (addr) | Jump if less |
+| `0x70` | READ_CHAR | 1 byte (reg) | Read character into register |
+| `0x80` | LOAD_MEM | 3 bytes (reg, addr) | Load from memory to register |
+| `0x81` | STORE_MEM | 3 bytes (addr, reg) | Store register to memory |
 
 ### Memory Map
 
@@ -515,14 +543,20 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 Future enhancements planned:
 
-- [ ] Pixel graphics mode
-- [ ] Sound/beep support
-- [ ] File I/O operations
-- [ ] Keyboard input opcodes
-- [ ] Arithmetic and logic operations
-- [ ] Conditional jumps and loops
-- [ ] Register operations
-- [ ] Memory read/write opcodes
+- [x] Pixel graphics mode
+- [x] Sound/beep support
+- [x] Keyboard input opcodes
+- [x] Arithmetic and logic operations
+- [x] Conditional jumps and loops
+- [x] Register operations
+- [x] Memory read/write opcodes
+- [ ] Advanced file I/O operations
+- [ ] Networking capabilities
+- [ ] Interrupt system
+- [ ] DMA controller
+- [ ] More graphics primitives (lines, circles)
+- [ ] Sprite system
+- [ ] Multi-channel audio
 
 ---
 
