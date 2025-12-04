@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include <math.h>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -49,6 +50,39 @@
 #define INPUT_BUFFER_SIZE 256
 #define MAX_HISTORY 50
 
+// Pixel graphics mode
+#define PIXEL_WIDTH 320
+#define PIXEL_HEIGHT 200
+
+// Opcodes
+#define OP_HALT         0x00
+#define OP_PRINT_CHAR   0x01
+#define OP_PRINT_STR    0x02
+#define OP_CLEAR_SCREEN 0x04
+#define OP_SLEEP_MS     0x20
+#define OP_BEEP         0x21
+#define OP_SET_PIXEL    0x30
+#define OP_CLEAR_PIXELS 0x31
+#define OP_LOAD_REG     0x40
+#define OP_STORE_REG    0x41
+#define OP_ADD          0x50
+#define OP_SUB          0x51
+#define OP_MUL          0x52
+#define OP_DIV          0x53
+#define OP_AND          0x54
+#define OP_OR           0x55
+#define OP_XOR          0x56
+#define OP_NOT          0x57
+#define OP_CMP          0x58
+#define OP_JMP          0x60
+#define OP_JZ           0x61
+#define OP_JNZ          0x62
+#define OP_JG           0x63
+#define OP_JL           0x64
+#define OP_READ_CHAR    0x70
+#define OP_LOAD_MEM     0x80
+#define OP_STORE_MEM    0x81
+
 // Virtual CPU state
 typedef struct {
     uint8_t memory[MEM_SIZE];
@@ -62,10 +96,12 @@ typedef struct {
 // Screen buffer
 typedef struct {
     char chars[SCREEN_HEIGHT][SCREEN_WIDTH];
+    uint8_t pixels[PIXEL_HEIGHT][PIXEL_WIDTH];
     int cursor_x;
     int cursor_y;
     int cursor_visible;
     int dirty;
+    int pixel_mode;
 } VScreen;
 
 // File system
@@ -87,6 +123,8 @@ typedef struct {
     char buffer[INPUT_BUFFER_SIZE];
     int pos;
     int ready;
+    char last_char;
+    int char_ready;
     pthread_mutex_t mutex;
 } InputBuffer;
 
@@ -125,6 +163,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 pthread_mutex_lock(&input_buf.mutex);
                 input_buf.buffer[input_buf.pos] = '\0';
                 input_buf.ready = 1;
+                input_buf.last_char = '\n';
+                input_buf.char_ready = 1;
                 pthread_mutex_unlock(&input_buf.mutex);
             } else if (wParam == VK_BACK) {
                 pthread_mutex_lock(&input_buf.mutex);
@@ -139,6 +179,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 pthread_mutex_lock(&input_buf.mutex);
                 if (input_buf.pos < INPUT_BUFFER_SIZE - 1) {
                     input_buf.buffer[input_buf.pos++] = (char)wParam;
+                    input_buf.last_char = (char)wParam;
+                    input_buf.char_ready = 1;
                     if (screen.cursor_x < SCREEN_WIDTH) {
                         screen.chars[screen.cursor_y][screen.cursor_x++] = (char)wParam;
                         screen.dirty = 1;
@@ -153,23 +195,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             
             HFONT old_font = (HFONT)SelectObject(hdc_mem, hfont);
             
-            for (int y = 0; y < SCREEN_HEIGHT; y++) {
-                for (int x = 0; x < SCREEN_WIDTH; x++) {
-                    RECT rect = {x * CHAR_WIDTH, y * CHAR_HEIGHT, 
-                                (x + 1) * CHAR_WIDTH, (y + 1) * CHAR_HEIGHT};
-                    
-                    HBRUSH brush = CreateSolidBrush(RGB(0, 0, 0));
-                    FillRect(hdc_mem, &rect, brush);
-                    DeleteObject(brush);
-                    
-                    SetTextColor(hdc_mem, RGB(255, 255, 255));
-                    SetBkMode(hdc_mem, TRANSPARENT);
-                    
-                    char c = screen.chars[y][x];
-                    if (x == screen.cursor_x && y == screen.cursor_y && screen.cursor_visible) {
-                        c = '_';
+            if (screen.pixel_mode) {
+                for (int y = 0; y < PIXEL_HEIGHT; y++) {
+                    for (int x = 0; x < PIXEL_WIDTH; x++) {
+                        int px = x * CHAR_WIDTH * SCREEN_WIDTH / PIXEL_WIDTH;
+                        int py = y * CHAR_HEIGHT * SCREEN_HEIGHT / PIXEL_HEIGHT;
+                        COLORREF color = screen.pixels[y][x] ? RGB(255, 255, 255) : RGB(0, 0, 0);
+                        SetPixel(hdc_mem, px, py, color);
                     }
-                    TextOutA(hdc_mem, x * CHAR_WIDTH, y * CHAR_HEIGHT, &c, 1);
+                }
+            } else {
+                for (int y = 0; y < SCREEN_HEIGHT; y++) {
+                    for (int x = 0; x < SCREEN_WIDTH; x++) {
+                        RECT rect = {x * CHAR_WIDTH, y * CHAR_HEIGHT, 
+                                    (x + 1) * CHAR_WIDTH, (y + 1) * CHAR_HEIGHT};
+                        
+                        HBRUSH brush = CreateSolidBrush(RGB(0, 0, 0));
+                        FillRect(hdc_mem, &rect, brush);
+                        DeleteObject(brush);
+                        
+                        SetTextColor(hdc_mem, RGB(0, 255, 0));
+                        SetBkMode(hdc_mem, TRANSPARENT);
+                        
+                        char c = screen.chars[y][x];
+                        if (x == screen.cursor_x && y == screen.cursor_y && screen.cursor_visible) {
+                            c = '_';
+                        }
+                        TextOutA(hdc_mem, x * CHAR_WIDTH, y * CHAR_HEIGHT, &c, 1);
+                    }
                 }
             }
             
@@ -224,7 +277,6 @@ void* window_thread(void* arg) {
     
     MSG msg;
     while (window_running) {
-        // Process all pending messages
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) {
                 window_running = 0;
@@ -236,14 +288,12 @@ void* window_thread(void* arg) {
         
         if (!window_running) break;
         
-        // Check if screen needs updating
         if (screen.dirty) {
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateWindow(hwnd);
             screen.dirty = 0;
         }
         
-        // Small sleep to prevent CPU spinning
         Sleep(16);
     }
     
@@ -302,6 +352,8 @@ void* window_thread(void* arg) {
                 if (keysym == XK_Return || keysym == XK_KP_Enter) {
                     input_buf.buffer[input_buf.pos] = '\0';
                     input_buf.ready = 1;
+                    input_buf.last_char = '\n';
+                    input_buf.char_ready = 1;
                 } else if (keysym == XK_BackSpace) {
                     if (input_buf.pos > 0) {
                         input_buf.pos--;
@@ -312,6 +364,8 @@ void* window_thread(void* arg) {
                 } else if (len > 0 && buf[0] >= 32 && buf[0] < 127) {
                     if (input_buf.pos < INPUT_BUFFER_SIZE - 1) {
                         input_buf.buffer[input_buf.pos++] = buf[0];
+                        input_buf.last_char = buf[0];
+                        input_buf.char_ready = 1;
                         if (screen.cursor_x < SCREEN_WIDTH) {
                             screen.chars[screen.cursor_y][screen.cursor_x++] = buf[0];
                             screen.dirty = 1;
@@ -328,18 +382,30 @@ void* window_thread(void* arg) {
             XFillRectangle(display, window, gc, 0, 0, 
                           SCREEN_WIDTH * CHAR_WIDTH, SCREEN_HEIGHT * CHAR_HEIGHT);
             
-            XSetForeground(display, gc, WhitePixel(display, DefaultScreen(display)));
-            
-            for (int y = 0; y < SCREEN_HEIGHT; y++) {
-                for (int x = 0; x < SCREEN_WIDTH; x++) {
-                    char c = screen.chars[y][x];
-                    if (x == screen.cursor_x && y == screen.cursor_y && screen.cursor_visible) {
-                        c = '_';
+            if (screen.pixel_mode) {
+                XSetForeground(display, gc, WhitePixel(display, DefaultScreen(display)));
+                for (int y = 0; y < PIXEL_HEIGHT; y++) {
+                    for (int x = 0; x < PIXEL_WIDTH; x++) {
+                        if (screen.pixels[y][x]) {
+                            int px = x * CHAR_WIDTH * SCREEN_WIDTH / PIXEL_WIDTH;
+                            int py = y * CHAR_HEIGHT * SCREEN_HEIGHT / PIXEL_HEIGHT;
+                            XDrawPoint(display, window, gc, px, py);
+                        }
                     }
-                    if (c != ' ') {
-                        XDrawString(display, window, gc, 
-                                  x * CHAR_WIDTH, y * CHAR_HEIGHT + 12,
-                                  &c, 1);
+                }
+            } else {
+                XSetForeground(display, gc, 0x00FF00);
+                for (int y = 0; y < SCREEN_HEIGHT; y++) {
+                    for (int x = 0; x < SCREEN_WIDTH; x++) {
+                        char c = screen.chars[y][x];
+                        if (x == screen.cursor_x && y == screen.cursor_y && screen.cursor_visible) {
+                            c = '_';
+                        }
+                        if (c != ' ') {
+                            XDrawString(display, window, gc, 
+                                      x * CHAR_WIDTH, y * CHAR_HEIGHT + 12,
+                                      &c, 1);
+                        }
                     }
                 }
             }
@@ -366,10 +432,23 @@ void init_screen(void) {
     }
     screen.cursor_visible = 1;
     screen.dirty = 1;
+    screen.pixel_mode = 0;
 }
 
 void clear_screen_display(void) {
     init_screen();
+}
+
+void clear_pixels(void) {
+    memset(screen.pixels, 0, sizeof(screen.pixels));
+    screen.dirty = 1;
+}
+
+void set_pixel(int x, int y, int value) {
+    if (x >= 0 && x < PIXEL_WIDTH && y >= 0 && y < PIXEL_HEIGHT) {
+        screen.pixels[y][x] = value ? 1 : 0;
+        screen.dirty = 1;
+    }
 }
 
 void putchar_screen(char c) {
@@ -427,6 +506,101 @@ char* read_line_from_screen(void) {
     putchar_screen('\n');
     
     return line_buf;
+}
+
+void play_beep(int freq, int duration) {
+    (void)freq;
+    (void)duration;
+#ifdef _WIN32
+    Beep(freq, duration);
+#else
+    printf("\a");
+    fflush(stdout);
+#endif
+}
+
+void show_boot_animation(void) {
+    const char *frames[] = {
+        "      ___  ___  __   ___  ___  ___\n"
+        "     |   )|   )|  \\ |   )|   )|    \n"
+        "     |  / |__/ |   ||__/ |__/ |__\n"
+        "     |   \\|    |   ||    |    |___\n"
+        "     |    |    |__/ |    |    |___)\n",
+        
+        " █▄ ▄█ █ ▄▀▀ █▀▄ ▄▀▄ ▄▀▀ ▄▀▄ █▄ ▄█ █▀▄ █ █ ▀█▀ ██▀ █▀▄\n"
+        " █ ▀ █ █ ▀▄▄ █▀▄ ▀▄▀ ▀▄▄ ▀▄▀ █ ▀ █ █▀  ▀▄█  █  █▄▄ █▀▄\n",
+        
+        "    ╔════════════════════════════════════╗\n"
+        "    ║  MicroComputer Emulator v1.0       ║\n"
+        "    ║  Initializing system...            ║\n"
+        "    ╚════════════════════════════════════╝\n"
+    };
+    
+    const char *spinner = "-\\|/";
+    
+    clear_screen_display();
+    print_to_screen("\n\n");
+    print_to_screen(frames[0]);
+    screen.dirty = 1;
+    sleep_ms(800);
+    
+    clear_screen_display();
+    print_to_screen("\n\n\n");
+    print_to_screen(frames[1]);
+    screen.dirty = 1;
+    sleep_ms(600);
+    
+    clear_screen_display();
+    print_to_screen("\n\n\n\n");
+    print_to_screen(frames[2]);
+    screen.dirty = 1;
+    sleep_ms(400);
+    
+    print_to_screen("\n    Loading");
+    screen.dirty = 1;
+    for (int i = 0; i < 12; i++) {
+        char s[2] = {spinner[i % 4], 0};
+        print_to_screen(s);
+        screen.dirty = 1;
+        sleep_ms(100);
+        putchar_screen('\b');
+    }
+    
+    print_to_screen("\n\n    [");
+    for (int i = 0; i <= 30; i++) {
+        print_to_screen("█");
+        screen.dirty = 1;
+        sleep_ms(30);
+    }
+    print_to_screen("]\n");
+    screen.dirty = 1;
+    sleep_ms(300);
+    
+    print_to_screen("\n    ✓ System Ready\n");
+    screen.dirty = 1;
+    sleep_ms(500);
+}
+
+void show_loading_animation(const char *filename) {
+    const char *spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+    print_to_screen("\n    Loading ");
+    print_to_screen(filename);
+    print_to_screen(" ");
+    screen.dirty = 1;
+    
+    for (int i = 0; i < 20; i++) {
+        int idx = i % 10;
+        char buf[5];
+        snprintf(buf, sizeof(buf), "%c", spinner[idx]);
+        print_to_screen(buf);
+        screen.dirty = 1;
+        sleep_ms(50);
+        putchar_screen('\b');
+    }
+    
+    print_to_screen("✓\n");
+    screen.dirty = 1;
+    sleep_ms(200);
 }
 
 // File system functions
@@ -575,29 +749,240 @@ void execute_instruction(void) {
     uint8_t opcode = cpu.memory[cpu.pc++];
     
     switch (opcode) {
-        case 0x00: // HALT
+        case OP_HALT:
             cpu.running = 0;
             break;
-        case 0x01: // PRINT_CHAR
+        case OP_PRINT_CHAR:
             if (cpu.pc < MEM_SIZE) {
                 char c = cpu.memory[cpu.pc++];
                 putchar_screen(c);
             }
             break;
-        case 0x02: // PRINT_STR
+        case OP_PRINT_STR:
             while (cpu.pc < MEM_SIZE && cpu.memory[cpu.pc]) {
                 putchar_screen(cpu.memory[cpu.pc++]);
             }
             cpu.pc++;
             break;
-        case 0x04: // CLEAR_SCREEN
+        case OP_CLEAR_SCREEN:
             clear_screen_display();
             break;
-        case 0x20: // SLEEP_MS
+        case OP_SLEEP_MS:
             if (cpu.pc + 1 < MEM_SIZE) {
                 uint16_t ms = cpu.memory[cpu.pc++];
                 ms |= (cpu.memory[cpu.pc++] << 8);
                 sleep_ms(ms);
+            }
+            break;
+        case OP_BEEP:
+            if (cpu.pc + 3 < MEM_SIZE) {
+                uint16_t freq = cpu.memory[cpu.pc++];
+                freq |= (cpu.memory[cpu.pc++] << 8);
+                uint16_t duration = cpu.memory[cpu.pc++];
+                duration |= (cpu.memory[cpu.pc++] << 8);
+                play_beep(freq, duration);
+            }
+            break;
+        case OP_SET_PIXEL:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint16_t x = cpu.memory[cpu.pc++];
+                x |= (cpu.memory[cpu.pc++] << 8);
+                uint16_t y = cpu.memory[cpu.pc++];
+                y |= (cpu.memory[cpu.pc++] << 8);
+                uint8_t val = cpu.memory[cpu.pc++];
+                set_pixel(x, y, val);
+                screen.pixel_mode = 1;
+            }
+            break;
+        case OP_CLEAR_PIXELS:
+            clear_pixels();
+            screen.pixel_mode = 0;
+            break;
+        case OP_LOAD_REG:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                uint16_t val = cpu.memory[cpu.pc++];
+                val |= (cpu.memory[cpu.pc++] << 8);
+                if (reg < 8) cpu.regs[reg] = val;
+            }
+            break;
+        case OP_STORE_REG:
+            if (cpu.pc < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                if (reg < 8 && cpu.pc + 1 < MEM_SIZE) {
+                    uint16_t addr = cpu.memory[cpu.pc++];
+                    addr |= (cpu.memory[cpu.pc++] << 8);
+                    if (addr + 1 < MEM_SIZE) {
+                        cpu.memory[addr] = cpu.regs[reg] & 0xFF;
+                        cpu.memory[addr + 1] = (cpu.regs[reg] >> 8) & 0xFF;
+                    }
+                }
+            }
+            break;
+        case OP_ADD:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8) {
+                    cpu.regs[dst] = cpu.regs[src1] + cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_SUB:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8) {
+                    cpu.regs[dst] = cpu.regs[src1] - cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_MUL:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8) {
+                    cpu.regs[dst] = cpu.regs[src1] * cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_DIV:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8 && cpu.regs[src2] != 0) {
+                    cpu.regs[dst] = cpu.regs[src1] / cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_AND:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8) {
+                    cpu.regs[dst] = cpu.regs[src1] & cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_OR:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8) {
+                    cpu.regs[dst] = cpu.regs[src1] | cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_XOR:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8) {
+                    cpu.regs[dst] = cpu.regs[src1] ^ cpu.regs[src2];
+                }
+            }
+            break;
+        case OP_NOT:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src = cpu.memory[cpu.pc++];
+                if (dst < 8 && src < 8) {
+                    cpu.regs[dst] = ~cpu.regs[src];
+                }
+            }
+            break;
+        case OP_CMP:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (src1 < 8 && src2 < 8) {
+                    cpu.flags = 0;
+                    if (cpu.regs[src1] == cpu.regs[src2]) cpu.flags |= 0x01; // Zero
+                    if (cpu.regs[src1] > cpu.regs[src2]) cpu.flags |= 0x02;  // Greater
+                    if (cpu.regs[src1] < cpu.regs[src2]) cpu.flags |= 0x04;  // Less
+                }
+            }
+            break;
+        case OP_JMP:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                if (addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
+        case OP_JZ:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                if ((cpu.flags & 0x01) && addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
+        case OP_JNZ:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                if (!(cpu.flags & 0x01) && addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
+        case OP_JG:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                if ((cpu.flags & 0x02) && addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
+        case OP_JL:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                if ((cpu.flags & 0x04) && addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
+        case OP_READ_CHAR:
+            if (cpu.pc < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                if (reg < 8) {
+                    pthread_mutex_lock(&input_buf.mutex);
+                    input_buf.char_ready = 0;
+                    pthread_mutex_unlock(&input_buf.mutex);
+                    
+                    while (!input_buf.char_ready && window_running) {
+                        sleep_ms(50);
+                    }
+                    
+                    pthread_mutex_lock(&input_buf.mutex);
+                    cpu.regs[reg] = input_buf.last_char;
+                    pthread_mutex_unlock(&input_buf.mutex);
+                }
+            }
+            break;
+        case OP_LOAD_MEM:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                if (reg < 8 && addr + 1 < MEM_SIZE) {
+                    cpu.regs[reg] = cpu.memory[addr];
+                    cpu.regs[reg] |= (cpu.memory[addr + 1] << 8);
+                }
+            }
+            break;
+        case OP_STORE_MEM:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                uint8_t reg = cpu.memory[cpu.pc++];
+                if (reg < 8 && addr + 1 < MEM_SIZE) {
+                    cpu.memory[addr] = cpu.regs[reg] & 0xFF;
+                    cpu.memory[addr + 1] = (cpu.regs[reg] >> 8) & 0xFF;
+                }
             }
             break;
         default: {
@@ -755,6 +1140,11 @@ void cmd_meminfo(void) {
     print_to_screen(buffer);
     snprintf(buffer, sizeof(buffer), "  Stack Pointer: 0x%04X\n", cpu.sp);
     print_to_screen(buffer);
+    print_to_screen("  Registers:\n");
+    for (int i = 0; i < 8; i++) {
+        snprintf(buffer, sizeof(buffer), "    R%d: 0x%04X (%u)\n", i, cpu.regs[i], cpu.regs[i]);
+        print_to_screen(buffer);
+    }
     print_to_screen("\n");
 }
 
@@ -823,6 +1213,9 @@ void print_prompt(void) {
 void shell_loop(void) {
     char cmd[256];
     
+    show_boot_animation();
+    clear_screen_display();
+    
     print_to_screen("MicroOS v1.0\n");
     print_to_screen("Type 'help' for available commands.\n\n");
     
@@ -835,7 +1228,6 @@ void shell_loop(void) {
         strncpy(cmd, line, sizeof(cmd) - 1);
         cmd[sizeof(cmd) - 1] = '\0';
         
-        // Trim whitespace
         int len = (int)strlen(cmd);
         while (len > 0 && isspace((unsigned char)cmd[len - 1])) {
             cmd[--len] = '\0';
@@ -845,7 +1237,6 @@ void shell_loop(void) {
         
         add_to_history(cmd);
         
-        // Parse command
         char *token = strtok(cmd, " ");
         if (!token) continue;
         
@@ -917,6 +1308,7 @@ void shell_loop(void) {
             if (filename) {
                 init_cpu();
                 if (load_program(filename) == 0) {
+                    show_loading_animation(filename);
                     print_to_screen("Running program...\n");
                     run_program();
                     print_to_screen("Program terminated.\n");
@@ -948,6 +1340,7 @@ int main(int argc, char *argv[]) {
     pthread_mutex_init(&input_buf.mutex, NULL);
     input_buf.pos = 0;
     input_buf.ready = 0;
+    input_buf.char_ready = 0;
     
     memset(&history, 0, sizeof(History));
     
