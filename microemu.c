@@ -1,10 +1,3 @@
-/*
- * MicroComputer Emulator with GUI Display and CLI OS
- * Compile: 
- *   Windows: gcc -o microemu.exe microemu.c -lws2_32 -lgdi32 -lpthread
- *   Linux:   gcc -o microemu microemu.c -lX11 -lpthread -lm
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -520,43 +513,19 @@ void play_beep(int freq, int duration) {
 }
 
 void show_boot_animation(void) {
-    const char *frames[] = {
-        "      ___  ___  __   ___  ___  ___\n"
-        "     |   )|   )|  \\ |   )|   )|    \n"
-        "     |  / |__/ |   ||__/ |__/ |__\n"
-        "     |   \\|    |   ||    |    |___\n"
-        "     |    |    |__/ |    |    |___)\n",
-        
-        " █▄ ▄█ █ ▄▀▀ █▀▄ ▄▀▄ ▄▀▀ ▄▀▄ █▄ ▄█ █▀▄ █ █ ▀█▀ ██▀ █▀▄\n"
-        " █ ▀ █ █ ▀▄▄ █▀▄ ▀▄▀ ▀▄▄ ▀▄▀ █ ▀ █ █▀  ▀▄█  █  █▄▄ █▀▄\n",
-        
-        "    ╔════════════════════════════════════╗\n"
-        "    ║  MicroComputer Emulator v1.0       ║\n"
-        "    ║  Initializing system...            ║\n"
-        "    ╚════════════════════════════════════╝\n"
-    };
-    
     const char *spinner = "-\\|/";
     
-    clear_screen_display();
-    print_to_screen("\n\n");
-    print_to_screen(frames[0]);
-    screen.dirty = 1;
-    sleep_ms(800);
-    
-    clear_screen_display();
-    print_to_screen("\n\n\n");
-    print_to_screen(frames[1]);
-    screen.dirty = 1;
-    sleep_ms(600);
     
     clear_screen_display();
     print_to_screen("\n\n\n\n");
-    print_to_screen(frames[2]);
+    print_to_screen("    +--------------------------------------+\n");
+    print_to_screen("    |  MicroComputer Emulator v1.0         |\n");
+    print_to_screen("    |  64KB RAM - 8 Registers - Graphics   |\n");
+    print_to_screen("    +--------------------------------------+\n");
     screen.dirty = 1;
-    sleep_ms(400);
+    sleep_ms(600);
     
-    print_to_screen("\n    Loading");
+    print_to_screen("\n    Initializing");
     screen.dirty = 1;
     for (int i = 0; i < 12; i++) {
         char s[2] = {spinner[i % 4], 0};
@@ -568,7 +537,7 @@ void show_boot_animation(void) {
     
     print_to_screen("\n\n    [");
     for (int i = 0; i <= 30; i++) {
-        print_to_screen("█");
+        print_to_screen("=");
         screen.dirty = 1;
         sleep_ms(30);
     }
@@ -576,29 +545,29 @@ void show_boot_animation(void) {
     screen.dirty = 1;
     sleep_ms(300);
     
-    print_to_screen("\n    ✓ System Ready\n");
+    print_to_screen("\n    > System Ready\n");
     screen.dirty = 1;
     sleep_ms(500);
 }
 
 void show_loading_animation(const char *filename) {
-    const char *spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+    const char *spinner = "-\\|/";
     print_to_screen("\n    Loading ");
     print_to_screen(filename);
     print_to_screen(" ");
     screen.dirty = 1;
     
     for (int i = 0; i < 20; i++) {
-        int idx = i % 10;
-        char buf[5];
-        snprintf(buf, sizeof(buf), "%c", spinner[idx]);
+        char buf[2];
+        buf[0] = spinner[i % 4];
+        buf[1] = 0;
         print_to_screen(buf);
         screen.dirty = 1;
         sleep_ms(50);
         putchar_screen('\b');
     }
     
-    print_to_screen("✓\n");
+    print_to_screen("*\n");
     screen.dirty = 1;
     sleep_ms(200);
 }
