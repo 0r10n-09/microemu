@@ -20,6 +20,8 @@
     #include <direct.h>
     #define mkdir(path, mode) _mkdir(path)
     #define PATH_SEP "\\"
+    #define sleep_ms(ms) Sleep(ms)
+    #define sleep_us(us) Sleep((us) / 1000)
 #else
     #include <unistd.h>
     #include <termios.h>
@@ -32,6 +34,8 @@
     #include <X11/Xutil.h>
     #include <X11/keysym.h>
     #define PATH_SEP "/"
+    #define sleep_ms(ms) usleep((ms) * 1000)
+    #define sleep_us(us) usleep(us)
 #endif
 
 // Virtual CPU Specifications
@@ -102,6 +106,7 @@ int window_running = 1;
 int os_mode = 1;
 InputBuffer input_buf;
 History history;
+time_t boot_time;
 
 #ifdef _WIN32
 HWND hwnd;
@@ -134,8 +139,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 pthread_mutex_lock(&input_buf.mutex);
                 if (input_buf.pos < INPUT_BUFFER_SIZE - 1) {
                     input_buf.buffer[input_buf.pos++] = (char)wParam;
-                    screen.chars[screen.cursor_y][screen.cursor_x++] = (char)wParam;
-                    screen.dirty = 1;
+                    if (screen.cursor_x < SCREEN_WIDTH) {
+                        screen.chars[screen.cursor_y][screen.cursor_x++] = (char)wParam;
+                        screen.dirty = 1;
+                    }
                 }
                 pthread_mutex_unlock(&input_buf.mutex);
             }
@@ -144,7 +151,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             
-            HFONT old_font = SelectObject(hdc_mem, hfont);
+            HFONT old_font = (HFONT)SelectObject(hdc_mem, hfont);
             
             for (int y = 0; y < SCREEN_HEIGHT; y++) {
                 for (int x = 0; x < SCREEN_WIDTH; x++) {
@@ -162,7 +169,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     if (x == screen.cursor_x && y == screen.cursor_y && screen.cursor_visible) {
                         c = '_';
                     }
-                    TextOut(hdc_mem, x * CHAR_WIDTH, y * CHAR_HEIGHT, &c, 1);
+                    TextOutA(hdc_mem, x * CHAR_WIDTH, y * CHAR_HEIGHT, &c, 1);
                 }
             }
             
@@ -178,21 +185,28 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 void* window_thread(void* arg) {
-    WNDCLASS wc = {0};
+    (void)arg;
+    WNDCLASSA wc = {0};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.lpszClassName = "MicroEmuClass";
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     
-    RegisterClass(&wc);
+    RegisterClassA(&wc);
     
     int win_width = SCREEN_WIDTH * CHAR_WIDTH + 16;
     int win_height = SCREEN_HEIGHT * CHAR_HEIGHT + 39;
     
-    hwnd = CreateWindowEx(0, "MicroEmuClass", "MicroComputer",
+    hwnd = CreateWindowExA(0, "MicroEmuClass", "MicroComputer",
                          WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
                          CW_USEDEFAULT, CW_USEDEFAULT, win_width, win_height,
                          NULL, NULL, GetModuleHandle(NULL), NULL);
+    
+    if (!hwnd) {
+        fprintf(stderr, "Failed to create window\n");
+        return NULL;
+    }
     
     HDC hdc = GetDC(hwnd);
     hdc_mem = CreateCompatibleDC(hdc);
@@ -201,21 +215,36 @@ void* window_thread(void* arg) {
     SelectObject(hdc_mem, hbm_mem);
     ReleaseDC(hwnd, hdc);
     
-    hfont = CreateFont(16, 8, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    hfont = CreateFontA(16, 8, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                       DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Courier New");
     
     ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
     
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0) && window_running) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    while (window_running) {
+        // Process all pending messages
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                window_running = 0;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
         
+        if (!window_running) break;
+        
+        // Check if screen needs updating
         if (screen.dirty) {
             InvalidateRect(hwnd, NULL, FALSE);
+            UpdateWindow(hwnd);
             screen.dirty = 0;
         }
+        
+        // Small sleep to prevent CPU spinning
+        Sleep(16);
     }
     
     return NULL;
@@ -226,9 +255,9 @@ Display *display;
 Window window;
 GC gc;
 XFontStruct *font;
-Colormap colormap;
 
 void* window_thread(void* arg) {
+    (void)arg;
     display = XOpenDisplay(NULL);
     if (!display) {
         fprintf(stderr, "Cannot open X display\n");
@@ -253,6 +282,7 @@ void* window_thread(void* arg) {
     XSetForeground(display, gc, WhitePixel(display, screen_num));
     
     XMapWindow(display, window);
+    XFlush(display);
     
     XEvent event;
     while (window_running) {
@@ -282,8 +312,10 @@ void* window_thread(void* arg) {
                 } else if (len > 0 && buf[0] >= 32 && buf[0] < 127) {
                     if (input_buf.pos < INPUT_BUFFER_SIZE - 1) {
                         input_buf.buffer[input_buf.pos++] = buf[0];
-                        screen.chars[screen.cursor_y][screen.cursor_x++] = buf[0];
-                        screen.dirty = 1;
+                        if (screen.cursor_x < SCREEN_WIDTH) {
+                            screen.chars[screen.cursor_y][screen.cursor_x++] = buf[0];
+                            screen.dirty = 1;
+                        }
                     }
                 }
                 
@@ -311,10 +343,11 @@ void* window_thread(void* arg) {
                     }
                 }
             }
+            XFlush(display);
             screen.dirty = 0;
         }
         
-        usleep(16000);
+        sleep_us(16000);
     }
     
     XCloseDisplay(display);
@@ -382,7 +415,7 @@ char* read_line_from_screen(void) {
     pthread_mutex_unlock(&input_buf.mutex);
     
     while (!input_buf.ready && window_running) {
-        usleep(50000);
+        sleep_ms(50);
     }
     
     pthread_mutex_lock(&input_buf.mutex);
@@ -415,7 +448,12 @@ int load_file_from_disk(const char *filename) {
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
     
-    uint8_t *data = malloc(size);
+    if (size < 0) {
+        fclose(f);
+        return -1;
+    }
+    
+    uint8_t *data = (uint8_t*)malloc(size);
     if (!data) {
         fclose(f);
         return -1;
@@ -430,15 +468,18 @@ int load_file_from_disk(const char *filename) {
     }
     
     struct stat st;
-    stat(path, &st);
+    if (stat(path, &st) == 0) {
+        strncpy(fs.files[fs.file_count].name, filename, 63);
+        fs.files[fs.file_count].name[63] = '\0';
+        fs.files[fs.file_count].data = data;
+        fs.files[fs.file_count].size = size;
+        fs.files[fs.file_count].modified = st.st_mtime;
+        fs.file_count++;
+        return 0;
+    }
     
-    strncpy(fs.files[fs.file_count].name, filename, 63);
-    fs.files[fs.file_count].data = data;
-    fs.files[fs.file_count].size = size;
-    fs.files[fs.file_count].modified = st.st_mtime;
-    fs.file_count++;
-    
-    return 0;
+    free(data);
+    return -1;
 }
 
 File* find_file(const char *name) {
@@ -477,17 +518,17 @@ void scan_filesystem(void) {
     fs.file_count = 0;
     
 #ifdef _WIN32
-    WIN32_FIND_DATA find_data;
+    WIN32_FIND_DATAA find_data;
     char search_path[MAX_PATH_LEN];
     snprintf(search_path, MAX_PATH_LEN, "%s%s*", fs.root_dir, PATH_SEP);
     
-    HANDLE hFind = FindFirstFile(search_path, &find_data);
+    HANDLE hFind = FindFirstFileA(search_path, &find_data);
     if (hFind != INVALID_HANDLE_VALUE) {
         do {
             if (!(find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
                 load_file_from_disk(find_data.cFileName);
             }
-        } while (FindNextFile(hFind, &find_data));
+        } while (FindNextFileA(hFind, &find_data));
         FindClose(hFind);
     }
 #else
@@ -495,7 +536,7 @@ void scan_filesystem(void) {
     if (dir) {
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
-            if (entry->d_type == DT_REG) {
+            if (entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN) {
                 load_file_from_disk(entry->d_name);
             }
         }
@@ -556,11 +597,7 @@ void execute_instruction(void) {
             if (cpu.pc + 1 < MEM_SIZE) {
                 uint16_t ms = cpu.memory[cpu.pc++];
                 ms |= (cpu.memory[cpu.pc++] << 8);
-#ifdef _WIN32
-                Sleep(ms);
-#else
-                usleep(ms * 1000);
-#endif
+                sleep_ms(ms);
             }
             break;
         default: {
@@ -613,7 +650,11 @@ void cmd_ls(void) {
     for (int i = 0; i < fs.file_count; i++) {
         struct tm *tm_info = localtime(&fs.files[i].modified);
         char time_str[64];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
+        if (tm_info) {
+            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
+        } else {
+            strcpy(time_str, "Unknown");
+        }
         
         snprintf(line, sizeof(line), "%-20s %8zu bytes  %s\n", 
                  fs.files[i].name, fs.files[i].size, time_str);
@@ -682,19 +723,21 @@ void cmd_date(void) {
     struct tm *tm_info = localtime(&t);
     char buffer[128];
     
-    strftime(buffer, sizeof(buffer), "%A, %B %d, %Y %H:%M:%S\n", tm_info);
-    print_to_screen(buffer);
+    if (tm_info) {
+        strftime(buffer, sizeof(buffer), "%A, %B %d, %Y %H:%M:%S\n", tm_info);
+        print_to_screen(buffer);
+    } else {
+        print_to_screen("Error: Could not get current time\n");
+    }
 }
-
-time_t boot_time;
 
 void cmd_uptime(void) {
     time_t now = time(NULL);
     time_t uptime = now - boot_time;
     
-    int hours = uptime / 3600;
-    int minutes = (uptime % 3600) / 60;
-    int seconds = uptime % 60;
+    int hours = (int)(uptime / 3600);
+    int minutes = (int)((uptime % 3600) / 60);
+    int seconds = (int)(uptime % 60);
     
     char buffer[128];
     snprintf(buffer, sizeof(buffer), "Uptime: %d hours, %d minutes, %d seconds\n", hours, minutes, seconds);
@@ -751,12 +794,15 @@ void cmd_hexdump(const char *filename) {
 
 void add_to_history(const char *cmd) {
     if (history.count < MAX_HISTORY) {
-        strcpy(history.commands[history.count++], cmd);
+        strncpy(history.commands[history.count], cmd, INPUT_BUFFER_SIZE - 1);
+        history.commands[history.count][INPUT_BUFFER_SIZE - 1] = '\0';
+        history.count++;
     } else {
         for (int i = 0; i < MAX_HISTORY - 1; i++) {
             strcpy(history.commands[i], history.commands[i + 1]);
         }
-        strcpy(history.commands[MAX_HISTORY - 1], cmd);
+        strncpy(history.commands[MAX_HISTORY - 1], cmd, INPUT_BUFFER_SIZE - 1);
+        history.commands[MAX_HISTORY - 1][INPUT_BUFFER_SIZE - 1] = '\0';
     }
 }
 
@@ -790,8 +836,8 @@ void shell_loop(void) {
         cmd[sizeof(cmd) - 1] = '\0';
         
         // Trim whitespace
-        int len = strlen(cmd);
-        while (len > 0 && isspace(cmd[len - 1])) {
+        int len = (int)strlen(cmd);
+        while (len > 0 && isspace((unsigned char)cmd[len - 1])) {
             cmd[--len] = '\0';
         }
         
@@ -805,7 +851,7 @@ void shell_loop(void) {
         
         if (strcmp(token, "exit") == 0) {
             print_to_screen("Goodbye!\n");
-            usleep(500000);
+            sleep_us(500000);
             break;
         } else if (strcmp(token, "help") == 0) {
             cmd_help();
@@ -889,6 +935,9 @@ void shell_loop(void) {
 }
 
 int main(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2,2), &wsa);
@@ -918,11 +967,7 @@ int main(int argc, char *argv[]) {
     pthread_t thread;
     pthread_create(&thread, NULL, window_thread, NULL);
     
-#ifdef _WIN32
-    Sleep(1000);
-#else
-    usleep(1000000);
-#endif
+    sleep_ms(1000);
     
     shell_loop();
     
