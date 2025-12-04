@@ -44,7 +44,7 @@ sudo apt-get install build-essential libx11-dev
 ```
 
 **Windows:**
-- MinGW-w64 or similar GCC toolchain
+- MinGW-w64 (MSYS2)
 - Windows SDK (included with MinGW)
 
 ### Build Instructions
