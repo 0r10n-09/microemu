@@ -10,6 +10,7 @@ A lightweight fantasy-computer emulator with a custom instruction set, text-base
 - 🖥️ **Virtual CPU** with custom instruction set
 - 📺 **80×25 character display** with GUI window
 - 🎨 **320×200 pixel graphics mode** for simple graphics
+- 🌈 **16-color text mode** with dynamic color switching
 - 🔊 **Sound support** with beep/tone generation
 - 💾 **64KB RAM** with 256-byte stack
 - 🎮 **8 general-purpose registers** for computation
@@ -17,7 +18,8 @@ A lightweight fantasy-computer emulator with a custom instruction set, text-base
 - ⌨️ **Keyboard input** opcodes
 - 🗂️ **Virtual filesystem** for program storage
 - 🐚 **Built-in shell** with Unix-like commands
-- 🎬 **Boot and loading animations**
+- 🎬 **Animated boot sequence** with pixel graphics
+- 🎪 **Dynamic ROM loading animations**
 - 🔧 **Cross-platform** (Windows & Linux)
 - 📝 **Program generator** system using C
 
@@ -211,7 +213,29 @@ Programs are created by writing C code that generates bytecode using helper func
 #define OP_PRINT_CHAR   0x01
 #define OP_PRINT_STR    0x02
 #define OP_CLEAR_SCREEN 0x04
+#define OP_SET_COLOR    0x05
 #define OP_SLEEP_MS     0x20
+#define OP_BEEP         0x21
+#define OP_SET_PIXEL    0x30
+#define OP_CLEAR_PIXELS 0x31
+
+// Color codes
+#define COLOR_BLACK     0
+#define COLOR_BLUE      1
+#define COLOR_GREEN     2
+#define COLOR_CYAN      3
+#define COLOR_RED       4
+#define COLOR_MAGENTA   5
+#define COLOR_YELLOW    6
+#define COLOR_WHITE     7
+#define COLOR_GRAY      8
+#define COLOR_BRIGHT_BLUE    9
+#define COLOR_BRIGHT_GREEN   10
+#define COLOR_BRIGHT_CYAN    11
+#define COLOR_BRIGHT_RED     12
+#define COLOR_BRIGHT_MAGENTA 13
+#define COLOR_BRIGHT_YELLOW  14
+#define COLOR_BRIGHT_WHITE   15
 
 // Program structure
 typedef struct {
@@ -266,6 +290,11 @@ void clear_screen(Program *p) {
     emit_byte(p, OP_CLEAR_SCREEN);
 }
 
+void set_color(Program *p, uint8_t color) {
+    emit_byte(p, OP_SET_COLOR);
+    emit_byte(p, color);
+}
+
 void print_str(Program *p, const char *str) {
     emit_byte(p, OP_PRINT_STR);
     emit_string(p, str);
@@ -279,6 +308,23 @@ void print_char(Program *p, char c) {
 void sleep_ms(Program *p, uint16_t ms) {
     emit_byte(p, OP_SLEEP_MS);
     emit_word(p, ms);
+}
+
+void beep(Program *p, uint16_t freq, uint16_t duration) {
+    emit_byte(p, OP_BEEP);
+    emit_word(p, freq);
+    emit_word(p, duration);
+}
+
+void set_pixel(Program *p, uint16_t x, uint16_t y, uint8_t value) {
+    emit_byte(p, OP_SET_PIXEL);
+    emit_word(p, x);
+    emit_word(p, y);
+    emit_byte(p, value);
+}
+
+void clear_pixels(Program *p) {
+    emit_byte(p, OP_CLEAR_PIXELS);
 }
 
 void halt(Program *p) {
@@ -297,7 +343,8 @@ void halt(Program *p) {
 - **Registers:** 8 general-purpose 16-bit registers
 - **Program Counter:** 16-bit
 - **Stack Pointer:** 16-bit
-- **Display:** 80×25 character text mode
+- **Display:** 80×25 character text mode with 16 colors
+- **Graphics:** 320×200 pixel mode (monochrome)
 
 ### Instruction Set
 
@@ -307,6 +354,7 @@ void halt(Program *p) {
 | `0x01` | PRINT_CHAR | 1 byte | Print single character |
 | `0x02` | PRINT_STR | String + null | Print null-terminated string |
 | `0x04` | CLEAR_SCREEN | None | Clear display |
+| `0x05` | SET_COLOR | 1 byte | Set text color (0-15) |
 | `0x20` | SLEEP_MS | 2 bytes (LE) | Sleep for N milliseconds |
 | `0x21` | BEEP | 4 bytes (freq, duration) | Play beep sound |
 | `0x30` | SET_PIXEL | 5 bytes (x, y, value) | Set pixel in graphics mode |
@@ -331,6 +379,21 @@ void halt(Program *p) {
 | `0x80` | LOAD_MEM | 3 bytes (reg, addr) | Load from memory to register |
 | `0x81` | STORE_MEM | 3 bytes (addr, reg) | Store register to memory |
 
+### Color Palette
+
+Text can be displayed in 16 different colors:
+
+| Code | Color | Code | Color |
+|------|-------|------|-------|
+| 0 | Black | 8 | Gray |
+| 1 | Blue | 9 | Bright Blue |
+| 2 | Green | 10 | Bright Green |
+| 3 | Cyan | 11 | Bright Cyan |
+| 4 | Red | 12 | Bright Red |
+| 5 | Magenta | 13 | Bright Magenta |
+| 6 | Yellow | 14 | Bright Yellow |
+| 7 | White | 15 | Bright White |
+
 ### Memory Map
 
 ```
@@ -343,71 +406,71 @@ void halt(Program *p) {
 
 ## Example Programs
 
-### Example 1: Hello World
+### Example 1: Colorful Hello World
 
 ```c
 int main() {
     Program prog;
     init_program(&prog);
     
-    print_str(&prog, "Hello, World!\n");
-    halt(&prog);
+    set_color(&prog, COLOR_BRIGHT_CYAN);
+    print_str(&prog, "Hello, ");
+    set_color(&prog, COLOR_BRIGHT_YELLOW);
+    print_str(&prog, "Colorful ");
+    set_color(&prog, COLOR_BRIGHT_GREEN);
+    print_str(&prog, "World!\n");
     
+    halt(&prog);
     save_program(&prog, "hello.bin");
     return 0;
 }
 ```
 
-### Example 2: Countdown Timer
+### Example 2: Sound and Animation
 
 ```c
 int main() {
     Program prog;
     init_program(&prog);
     
-    for (int i = 10; i >= 0; i--) {
-        clear_screen(&prog);
-        
-        char buf[32];
-        snprintf(buf, sizeof(buf), "Countdown: %d\n", i);
-        print_str(&prog, buf);
-        
-        sleep_ms(&prog, 1000);
+    // Play a musical scale
+    uint16_t notes[] = {262, 294, 330, 349, 392, 440, 494, 523};
+    
+    for (int i = 0; i < 8; i++) {
+        set_color(&prog, COLOR_BRIGHT_CYAN + i);
+        print_str(&prog, "*");
+        beep(&prog, notes[i], 200);
+        sleep_ms(&prog, 100);
     }
     
-    print_str(&prog, "\nBlastoff!\n");
+    print_str(&prog, "\n");
     halt(&prog);
-    
-    save_program(&prog, "countdown.bin");
+    save_program(&prog, "music.bin");
     return 0;
 }
 ```
 
-### Example 3: Text Animation
+### Example 3: Pixel Graphics
 
 ```c
 int main() {
     Program prog;
     init_program(&prog);
     
-    const char *frames[] = {
-        "  O  \n /|\\ \n / \\ ",
-        " \\O/ \n  |  \n / \\ ",
-        "  O  \n /|\\ \n / \\ ",
-        " /O\\ \n  |  \n / \\ "
-    };
+    // Draw a circle
+    clear_pixels(&prog);
+    int cx = 160, cy = 100, r = 50;
     
-    for (int loop = 0; loop < 10; loop++) {
-        for (int i = 0; i < 4; i++) {
-            clear_screen(&prog);
-            print_str(&prog, "Dancing Stick Figure\n\n");
-            print_str(&prog, frames[i]);
-            sleep_ms(&prog, 200);
-        }
+    for (int angle = 0; angle < 360; angle += 5) {
+        double rad = angle * 3.14159 / 180.0;
+        int x = cx + (int)(r * cos(rad));
+        int y = cy + (int)(r * sin(rad));
+        set_pixel(&prog, x, y, 1);
     }
     
+    sleep_ms(&prog, 3000);
     halt(&prog);
-    save_program(&prog, "dance.bin");
+    save_program(&prog, "circle.bin");
     return 0;
 }
 ```
@@ -438,11 +501,27 @@ Writes the program buffer to a file and frees memory.
 #### `void clear_screen(Program *p)`
 Clears the entire display and resets cursor to top-left.
 
+#### `void set_color(Program *p, uint8_t color)`
+Sets the current text color (0-15). All subsequent text will use this color.
+
 #### `void print_str(Program *p, const char *str)`
 Prints a string at the current cursor position. Supports `\n` for newlines.
 
 #### `void print_char(Program *p, char c)`
 Prints a single character at the current cursor position.
+
+### Graphics Functions
+
+#### `void set_pixel(Program *p, uint16_t x, uint16_t y, uint8_t value)`
+Sets a pixel at coordinates (x, y) in graphics mode. Value is 0 (off) or 1 (on).
+
+#### `void clear_pixels(Program *p)`
+Clears the entire pixel buffer and returns to text mode.
+
+### Sound Functions
+
+#### `void beep(Program *p, uint16_t freq, uint16_t duration)`
+Plays a tone at the specified frequency (Hz) for the given duration (ms).
 
 ### Timing
 
@@ -550,13 +629,17 @@ Future enhancements planned:
 - [x] Conditional jumps and loops
 - [x] Register operations
 - [x] Memory read/write opcodes
+- [x] 16-color text mode
+- [x] Animated boot sequence
+- [x] Dynamic loading animations
+- [ ] Drawing primitives (lines, rectangles, circles)
+- [ ] Sprite system with transparency
+- [ ] Multi-channel audio mixer
 - [ ] Advanced file I/O operations
 - [ ] Networking capabilities
 - [ ] Interrupt system
 - [ ] DMA controller
-- [ ] More graphics primitives (lines, circles)
-- [ ] Sprite system
-- [ ] Multi-channel audio
+- [ ] Tile-based graphics engine
 
 ---
 
