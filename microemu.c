@@ -1,3 +1,10 @@
+/*
+ * MicroComputer Emulator with GUI Display and CLI OS
+ * Compile: 
+ *   Windows: gcc -o microemu.exe microemu.c -lws2_32 -lgdi32 -lpthread
+ *   Linux:   gcc -o microemu microemu.c -lX11 -lpthread -lm
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +59,7 @@
 #define OP_PRINT_CHAR   0x01
 #define OP_PRINT_STR    0x02
 #define OP_CLEAR_SCREEN 0x04
+#define OP_SET_COLOR    0x05
 #define OP_SLEEP_MS     0x20
 #define OP_BEEP         0x21
 #define OP_SET_PIXEL    0x30
@@ -76,6 +84,24 @@
 #define OP_LOAD_MEM     0x80
 #define OP_STORE_MEM    0x81
 
+// Color codes
+#define COLOR_BLACK     0
+#define COLOR_BLUE      1
+#define COLOR_GREEN     2
+#define COLOR_CYAN      3
+#define COLOR_RED       4
+#define COLOR_MAGENTA   5
+#define COLOR_YELLOW    6
+#define COLOR_WHITE     7
+#define COLOR_GRAY      8
+#define COLOR_BRIGHT_BLUE    9
+#define COLOR_BRIGHT_GREEN   10
+#define COLOR_BRIGHT_CYAN    11
+#define COLOR_BRIGHT_RED     12
+#define COLOR_BRIGHT_MAGENTA 13
+#define COLOR_BRIGHT_YELLOW  14
+#define COLOR_BRIGHT_WHITE   15
+
 // Virtual CPU state
 typedef struct {
     uint8_t memory[MEM_SIZE];
@@ -89,12 +115,14 @@ typedef struct {
 // Screen buffer
 typedef struct {
     char chars[SCREEN_HEIGHT][SCREEN_WIDTH];
+    uint8_t colors[SCREEN_HEIGHT][SCREEN_WIDTH]; // Color attributes
     uint8_t pixels[PIXEL_HEIGHT][PIXEL_WIDTH];
     int cursor_x;
     int cursor_y;
     int cursor_visible;
     int dirty;
     int pixel_mode;
+    uint8_t current_color;
 } VScreen;
 
 // File system
@@ -145,6 +173,28 @@ HDC hdc_mem;
 HBITMAP hbm_mem;
 HFONT hfont;
 
+COLORREF get_color_rgb(uint8_t color) {
+    switch(color) {
+        case COLOR_BLACK:    return RGB(0, 0, 0);
+        case COLOR_BLUE:     return RGB(0, 0, 170);
+        case COLOR_GREEN:    return RGB(0, 170, 0);
+        case COLOR_CYAN:     return RGB(0, 170, 170);
+        case COLOR_RED:      return RGB(170, 0, 0);
+        case COLOR_MAGENTA:  return RGB(170, 0, 170);
+        case COLOR_YELLOW:   return RGB(170, 85, 0);
+        case COLOR_WHITE:    return RGB(170, 170, 170);
+        case COLOR_GRAY:     return RGB(85, 85, 85);
+        case COLOR_BRIGHT_BLUE:    return RGB(85, 85, 255);
+        case COLOR_BRIGHT_GREEN:   return RGB(85, 255, 85);
+        case COLOR_BRIGHT_CYAN:    return RGB(85, 255, 255);
+        case COLOR_BRIGHT_RED:     return RGB(255, 85, 85);
+        case COLOR_BRIGHT_MAGENTA: return RGB(255, 85, 255);
+        case COLOR_BRIGHT_YELLOW:  return RGB(255, 255, 85);
+        case COLOR_BRIGHT_WHITE:   return RGB(255, 255, 255);
+        default: return RGB(170, 170, 170);
+    }
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_DESTROY:
@@ -193,7 +243,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     for (int x = 0; x < PIXEL_WIDTH; x++) {
                         int px = x * CHAR_WIDTH * SCREEN_WIDTH / PIXEL_WIDTH;
                         int py = y * CHAR_HEIGHT * SCREEN_HEIGHT / PIXEL_HEIGHT;
-                        COLORREF color = screen.pixels[y][x] ? RGB(255, 255, 255) : RGB(0, 0, 0);
+                        COLORREF color = screen.pixels[y][x] ? RGB(100, 200, 255) : RGB(0, 0, 0);
                         SetPixel(hdc_mem, px, py, color);
                     }
                 }
@@ -207,7 +257,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                         FillRect(hdc_mem, &rect, brush);
                         DeleteObject(brush);
                         
-                        SetTextColor(hdc_mem, RGB(0, 255, 0));
+                        COLORREF text_color = get_color_rgb(screen.colors[y][x]);
+                        SetTextColor(hdc_mem, text_color);
                         SetBkMode(hdc_mem, TRANSPARENT);
                         
                         char c = screen.chars[y][x];
@@ -298,6 +349,30 @@ Display *display;
 Window window;
 GC gc;
 XFontStruct *font;
+XColor xcolors[16];
+
+unsigned long get_x11_color(uint8_t color) {
+    if (color < 16) {
+        return xcolors[color].pixel;
+    }
+    return xcolors[COLOR_WHITE].pixel;
+}
+
+void init_x11_colors(void) {
+    Colormap colormap = DefaultColormap(display, DefaultScreen(display));
+    
+    const char *color_names[] = {
+        "#000000", "#0000AA", "#00AA00", "#00AAAA",
+        "#AA0000", "#AA00AA", "#AA5500", "#AAAAAA",
+        "#555555", "#5555FF", "#55FF55", "#55FFFF",
+        "#FF5555", "#FF55FF", "#FFFF55", "#FFFFFF"
+    };
+    
+    for (int i = 0; i < 16; i++) {
+        XParseColor(display, colormap, color_names[i], &xcolors[i]);
+        XAllocColor(display, colormap, &xcolors[i]);
+    }
+}
 
 void* window_thread(void* arg) {
     (void)arg;
@@ -322,7 +397,7 @@ void* window_thread(void* arg) {
     font = XLoadQueryFont(display, "fixed");
     if (font) XSetFont(display, gc, font->fid);
     
-    XSetForeground(display, gc, WhitePixel(display, screen_num));
+    init_x11_colors();
     
     XMapWindow(display, window);
     XFlush(display);
@@ -376,7 +451,7 @@ void* window_thread(void* arg) {
                           SCREEN_WIDTH * CHAR_WIDTH, SCREEN_HEIGHT * CHAR_HEIGHT);
             
             if (screen.pixel_mode) {
-                XSetForeground(display, gc, WhitePixel(display, DefaultScreen(display)));
+                XSetForeground(display, gc, get_x11_color(COLOR_BRIGHT_CYAN));
                 for (int y = 0; y < PIXEL_HEIGHT; y++) {
                     for (int x = 0; x < PIXEL_WIDTH; x++) {
                         if (screen.pixels[y][x]) {
@@ -387,7 +462,6 @@ void* window_thread(void* arg) {
                     }
                 }
             } else {
-                XSetForeground(display, gc, 0x00FF00);
                 for (int y = 0; y < SCREEN_HEIGHT; y++) {
                     for (int x = 0; x < SCREEN_WIDTH; x++) {
                         char c = screen.chars[y][x];
@@ -395,6 +469,7 @@ void* window_thread(void* arg) {
                             c = '_';
                         }
                         if (c != ' ') {
+                            XSetForeground(display, gc, get_x11_color(screen.colors[y][x]));
                             XDrawString(display, window, gc, 
                                       x * CHAR_WIDTH, y * CHAR_HEIGHT + 12,
                                       &c, 1);
@@ -421,11 +496,13 @@ void init_screen(void) {
     for (int y = 0; y < SCREEN_HEIGHT; y++) {
         for (int x = 0; x < SCREEN_WIDTH; x++) {
             screen.chars[y][x] = ' ';
+            screen.colors[y][x] = COLOR_WHITE;
         }
     }
     screen.cursor_visible = 1;
     screen.dirty = 1;
     screen.pixel_mode = 0;
+    screen.current_color = COLOR_WHITE;
 }
 
 void clear_screen_display(void) {
@@ -462,11 +539,16 @@ void putchar_screen(char c) {
         if (screen.cursor_y >= SCREEN_HEIGHT) {
             for (int y = 0; y < SCREEN_HEIGHT - 1; y++) {
                 memcpy(screen.chars[y], screen.chars[y+1], SCREEN_WIDTH);
+                memcpy(screen.colors[y], screen.colors[y+1], SCREEN_WIDTH);
             }
             memset(screen.chars[SCREEN_HEIGHT-1], ' ', SCREEN_WIDTH);
+            for (int x = 0; x < SCREEN_WIDTH; x++) {
+                screen.colors[SCREEN_HEIGHT-1][x] = screen.current_color;
+            }
             screen.cursor_y = SCREEN_HEIGHT - 1;
         }
         screen.chars[screen.cursor_y][screen.cursor_x] = c;
+        screen.colors[screen.cursor_y][screen.cursor_x] = screen.current_color;
         screen.cursor_x++;
     }
     screen.dirty = 1;
@@ -513,63 +595,169 @@ void play_beep(int freq, int duration) {
 }
 
 void show_boot_animation(void) {
+    // Cool pixel-based boot animation
+    clear_pixels();
+    screen.pixel_mode = 1;
+    screen.dirty = 1;
+    
+    // Draw expanding circle animation
+    int cx = 160, cy = 100;
+    for (int radius = 5; radius <= 60; radius += 3) {
+        clear_pixels();
+        for (int angle = 0; angle < 360; angle += 3) {
+            double rad = angle * 3.14159 / 180.0;
+            int x = cx + (int)(radius * cos(rad));
+            int y = cy + (int)(radius * sin(rad));
+            set_pixel(x, y, 1);
+        }
+        screen.dirty = 1;
+        sleep_ms(30);
+    }
+    
+    // Flash effect
+    for (int i = 0; i < 3; i++) {
+        clear_pixels();
+        screen.dirty = 1;
+        sleep_ms(100);
+        for (int y = 0; y < PIXEL_HEIGHT; y++) {
+            for (int x = 0; x < PIXEL_WIDTH; x++) {
+                if ((x + y) % 20 == 0) set_pixel(x, y, 1);
+            }
+        }
+        screen.dirty = 1;
+        sleep_ms(100);
+    }
+    
+    screen.dirty = 1;
+    sleep_ms(1000);
+    
+    // Return to text mode
+    clear_screen_display();
+    screen.pixel_mode = 0;
+    
     const char *spinner = "-\\|/";
     
-    
-    clear_screen_display();
-    print_to_screen("\n\n\n\n");
+    screen.current_color = COLOR_BRIGHT_YELLOW;
+    print_to_screen("\n\n");
     print_to_screen("    +--------------------------------------+\n");
-    print_to_screen("    |  MicroComputer Emulator v1.0         |\n");
-    print_to_screen("    |  64KB RAM - 8 Registers - Graphics   |\n");
+    print_to_screen("    |");
+    screen.current_color = COLOR_BRIGHT_WHITE;
+    print_to_screen("  MicroComputer Emulator v1.0       ");
+    screen.current_color = COLOR_BRIGHT_YELLOW;
+    print_to_screen("  |\n");
+    print_to_screen("    |");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  64KB RAM - 8 Registers - Graphics   ");
+    screen.current_color = COLOR_BRIGHT_YELLOW;
+    print_to_screen("|\n");
     print_to_screen("    +--------------------------------------+\n");
     screen.dirty = 1;
-    sleep_ms(600);
+    sleep_ms(500);
     
+    screen.current_color = COLOR_GREEN;
     print_to_screen("\n    Initializing");
     screen.dirty = 1;
     for (int i = 0; i < 12; i++) {
         char s[2] = {spinner[i % 4], 0};
         print_to_screen(s);
         screen.dirty = 1;
-        sleep_ms(100);
+        sleep_ms(80);
         putchar_screen('\b');
     }
     
     print_to_screen("\n\n    [");
+    screen.current_color = COLOR_BRIGHT_GREEN;
     for (int i = 0; i <= 30; i++) {
         print_to_screen("=");
         screen.dirty = 1;
-        sleep_ms(30);
+        sleep_ms(25);
     }
+    screen.current_color = COLOR_GREEN;
     print_to_screen("]\n");
     screen.dirty = 1;
     sleep_ms(300);
     
+    screen.current_color = COLOR_BRIGHT_GREEN;
     print_to_screen("\n    > System Ready\n");
+    screen.current_color = COLOR_WHITE;
     screen.dirty = 1;
     sleep_ms(500);
 }
 
 void show_loading_animation(const char *filename) {
-    const char *spinner = "-\\|/";
-    print_to_screen("\n    Loading ");
-    print_to_screen(filename);
-    print_to_screen(" ");
+    // Switch to pixel mode for cool loading animation
+    screen.pixel_mode = 1;
+    clear_pixels();
     screen.dirty = 1;
     
-    for (int i = 0; i < 20; i++) {
-        char buf[2];
-        buf[0] = spinner[i % 4];
-        buf[1] = 0;
-        print_to_screen(buf);
-        screen.dirty = 1;
-        sleep_ms(50);
-        putchar_screen('\b');
+    // Draw loading bar frame
+    for (int x = 60; x < 260; x++) {
+        set_pixel(x, 90, 1);
+        set_pixel(x, 110, 1);
     }
-    
-    print_to_screen("*\n");
+    for (int y = 90; y <= 110; y++) {
+        set_pixel(60, y, 1);
+        set_pixel(260, y, 1);
+    }
     screen.dirty = 1;
     sleep_ms(200);
+    
+    // Animated loading bar with wave effect
+    for (int pass = 0; pass < 2; pass++) {
+        for (int x = 62; x < 258; x += 2) {
+            // Fill bar
+            for (int y = 92; y < 109; y++) {
+                set_pixel(x, y, 1);
+                set_pixel(x + 1, y, 1);
+            }
+            
+            // Wave effect behind
+            if (x > 70) {
+                int wave_x = x - 10;
+                for (int offset = -3; offset <= 3; offset++) {
+                    int wave_y = 100 + (int)(3 * sin((wave_x + offset * 10) * 0.3));
+                    if (wave_y >= 92 && wave_y < 109) {
+                        set_pixel(wave_x, wave_y, 1);
+                    }
+                }
+            }
+            
+            screen.dirty = 1;
+            sleep_ms(8);
+        }
+    }
+    
+    // Flash effect
+    for (int i = 0; i < 3; i++) {
+        clear_pixels();
+        screen.dirty = 1;
+        sleep_ms(50);
+        
+        // Draw filled box
+        for (int x = 60; x < 260; x++) {
+            for (int y = 90; y <= 110; y++) {
+                set_pixel(x, y, 1);
+            }
+        }
+        screen.dirty = 1;
+        sleep_ms(50);
+    }
+    
+    sleep_ms(200);
+    
+    // Return to text mode
+    clear_screen_display();
+    screen.pixel_mode = 0;
+    
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\n    Loading: ");
+    screen.current_color = COLOR_BRIGHT_YELLOW;
+    print_to_screen(filename);
+    screen.current_color = COLOR_BRIGHT_GREEN;
+    print_to_screen(" [OK]\n");
+    screen.current_color = COLOR_WHITE;
+    screen.dirty = 1;
+    sleep_ms(300);
 }
 
 // File system functions
@@ -735,6 +923,14 @@ void execute_instruction(void) {
             break;
         case OP_CLEAR_SCREEN:
             clear_screen_display();
+            break;
+        case OP_SET_COLOR:
+            if (cpu.pc < MEM_SIZE) {
+                uint8_t color = cpu.memory[cpu.pc++];
+                if (color < 16) {
+                    screen.current_color = color;
+                }
+            }
             break;
         case OP_SLEEP_MS:
             if (cpu.pc + 1 < MEM_SIZE) {
@@ -974,22 +1170,68 @@ void run_program(void) {
 
 // Command implementations
 void cmd_help(void) {
+    screen.current_color = COLOR_BRIGHT_YELLOW;
     print_to_screen("\nAvailable commands:\n");
-    print_to_screen("  help           - Display this help message\n");
-    print_to_screen("  clear          - Clear the screen\n");
-    print_to_screen("  ls             - List files in current directory\n");
-    print_to_screen("  cat <file>     - Display file contents\n");
-    print_to_screen("  rm <file>      - Delete a file\n");
-    print_to_screen("  cp <src> <dst> - Copy a file\n");
-    print_to_screen("  mv <src> <dst> - Move/rename a file\n");
-    print_to_screen("  echo <text>    - Print text to screen\n");
-    print_to_screen("  date           - Show current date and time\n");
-    print_to_screen("  uptime         - Show system uptime\n");
-    print_to_screen("  meminfo        - Display memory information\n");
-    print_to_screen("  run <file>     - Execute a binary program\n");
-    print_to_screen("  hexdump <file> - Display hexadecimal dump of file\n");
-    print_to_screen("  history        - Show command history\n");
-    print_to_screen("  exit           - Exit the system\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  help           ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display this help message\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  clear          ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Clear the screen\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  ls             ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- List files in current directory\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  cat <file>     ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display file contents\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  rm <file>      ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Delete a file\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  cp <src> <dst> ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Copy a file\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  mv <src> <dst> ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Move/rename a file\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  echo <text>    ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Print text to screen\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  date           ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Show current date and time\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  uptime         ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Show system uptime\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  meminfo        ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display memory information\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  run <file>     ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Execute a binary program\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  hexdump <file> ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display hexadecimal dump of file\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  history        ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Show command history\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  exit           ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Exit the system\n");
     print_to_screen("\n");
 }
 
@@ -1176,7 +1418,9 @@ void cmd_history(void) {
 }
 
 void print_prompt(void) {
+    screen.current_color = COLOR_BRIGHT_GREEN;
     print_to_screen("$ ");
+    screen.current_color = COLOR_WHITE;
 }
 
 void shell_loop(void) {
@@ -1185,8 +1429,11 @@ void shell_loop(void) {
     show_boot_animation();
     clear_screen_display();
     
+    screen.current_color = COLOR_BRIGHT_CYAN;
     print_to_screen("MicroOS v1.0\n");
+    screen.current_color = COLOR_YELLOW;
     print_to_screen("Type 'help' for available commands.\n\n");
+    screen.current_color = COLOR_WHITE;
     
     while (window_running) {
         print_prompt();
