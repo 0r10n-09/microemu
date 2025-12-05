@@ -16,8 +16,8 @@
 #include <math.h>
 
 #ifdef _WIN32
-    #include <windows.h>
     #include <winsock2.h>
+    #include <windows.h>
     #include <direct.h>
     #define mkdir(path, mode) _mkdir(path)
     #define PATH_SEP "\\"
@@ -60,29 +60,47 @@
 #define OP_PRINT_STR    0x02
 #define OP_CLEAR_SCREEN 0x04
 #define OP_SET_COLOR    0x05
+#define OP_GET_CURSOR   0x06
+#define OP_SET_CURSOR   0x07
+#define OP_DRAW_LINE    0x08
+#define OP_DRAW_RECT    0x09
+#define OP_FILL_RECT    0x0A
+#define OP_DRAW_CIRCLE  0x0B
 #define OP_SLEEP_MS     0x20
 #define OP_BEEP         0x21
+#define OP_GET_TIME     0x22
+#define OP_RANDOM       0x23
 #define OP_SET_PIXEL    0x30
 #define OP_CLEAR_PIXELS 0x31
+#define OP_DRAW_SPRITE  0x32
 #define OP_LOAD_REG     0x40
 #define OP_STORE_REG    0x41
+#define OP_PUSH         0x42
+#define OP_POP          0x43
 #define OP_ADD          0x50
 #define OP_SUB          0x51
 #define OP_MUL          0x52
 #define OP_DIV          0x53
-#define OP_AND          0x54
-#define OP_OR           0x55
-#define OP_XOR          0x56
-#define OP_NOT          0x57
-#define OP_CMP          0x58
+#define OP_MOD          0x54
+#define OP_AND          0x55
+#define OP_OR           0x56
+#define OP_XOR          0x57
+#define OP_NOT          0x58
+#define OP_SHL          0x59
+#define OP_SHR          0x5A
+#define OP_CMP          0x5B
 #define OP_JMP          0x60
 #define OP_JZ           0x61
 #define OP_JNZ          0x62
 #define OP_JG           0x63
 #define OP_JL           0x64
+#define OP_CALL         0x65
+#define OP_RET          0x66
 #define OP_READ_CHAR    0x70
+#define OP_KEY_PRESSED  0x71
 #define OP_LOAD_MEM     0x80
 #define OP_STORE_MEM    0x81
+#define OP_COPY_MEM     0x82
 
 // Color codes
 #define COLOR_BLACK     0
@@ -521,6 +539,64 @@ void set_pixel(int x, int y, int value) {
     }
 }
 
+void draw_line(int x0, int y0, int x1, int y1) {
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+    
+    while (1) {
+        set_pixel(x0, y0, 1);
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+void draw_rect(int x, int y, int w, int h) {
+    for (int i = 0; i < w; i++) {
+        set_pixel(x + i, y, 1);
+        set_pixel(x + i, y + h - 1, 1);
+    }
+    for (int i = 0; i < h; i++) {
+        set_pixel(x, y + i, 1);
+        set_pixel(x + w - 1, y + i, 1);
+    }
+}
+
+void fill_rect(int x, int y, int w, int h) {
+    for (int i = 0; i < h; i++) {
+        for (int j = 0; j < w; j++) {
+            set_pixel(x + j, y + i, 1);
+        }
+    }
+}
+
+void draw_circle(int cx, int cy, int radius) {
+    int x = radius, y = 0;
+    int err = 0;
+    
+    while (x >= y) {
+        set_pixel(cx + x, cy + y, 1);
+        set_pixel(cx + y, cy + x, 1);
+        set_pixel(cx - y, cy + x, 1);
+        set_pixel(cx - x, cy + y, 1);
+        set_pixel(cx - x, cy - y, 1);
+        set_pixel(cx - y, cy - x, 1);
+        set_pixel(cx + y, cy - x, 1);
+        set_pixel(cx + x, cy - y, 1);
+        
+        if (err <= 0) {
+            y += 1;
+            err += 2*y + 1;
+        }
+        if (err > 0) {
+            x -= 1;
+            err -= 2*x + 1;
+        }
+    }
+}
+
 void putchar_screen(char c) {
     if (c == '\n') {
         screen.cursor_y++;
@@ -932,6 +1008,62 @@ void execute_instruction(void) {
                 }
             }
             break;
+        case OP_GET_CURSOR:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t reg_x = cpu.memory[cpu.pc++];
+                uint8_t reg_y = cpu.memory[cpu.pc++];
+                if (reg_x < 8) cpu.regs[reg_x] = screen.cursor_x;
+                if (reg_y < 8) cpu.regs[reg_y] = screen.cursor_y;
+            }
+            break;
+        case OP_SET_CURSOR:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t x = cpu.memory[cpu.pc++];
+                uint8_t y = cpu.memory[cpu.pc++];
+                if (x < SCREEN_WIDTH) screen.cursor_x = x;
+                if (y < SCREEN_HEIGHT) screen.cursor_y = y;
+                screen.dirty = 1;
+            }
+            break;
+        case OP_DRAW_LINE:
+            if (cpu.pc + 7 < MEM_SIZE) {
+                uint16_t x0 = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t y0 = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t x1 = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t y1 = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                draw_line(x0, y0, x1, y1);
+                screen.pixel_mode = 1;
+            }
+            break;
+        case OP_DRAW_RECT:
+            if (cpu.pc + 7 < MEM_SIZE) {
+                uint16_t x = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t y = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t w = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t h = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                draw_rect(x, y, w, h);
+                screen.pixel_mode = 1;
+            }
+            break;
+        case OP_FILL_RECT:
+            if (cpu.pc + 7 < MEM_SIZE) {
+                uint16_t x = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t y = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t w = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t h = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                fill_rect(x, y, w, h);
+                screen.pixel_mode = 1;
+            }
+            break;
+        case OP_DRAW_CIRCLE:
+            if (cpu.pc + 5 < MEM_SIZE) {
+                uint16_t cx = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t cy = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t r = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                draw_circle(cx, cy, r);
+                screen.pixel_mode = 1;
+            }
+            break;
         case OP_SLEEP_MS:
             if (cpu.pc + 1 < MEM_SIZE) {
                 uint16_t ms = cpu.memory[cpu.pc++];
@@ -946,6 +1078,24 @@ void execute_instruction(void) {
                 uint16_t duration = cpu.memory[cpu.pc++];
                 duration |= (cpu.memory[cpu.pc++] << 8);
                 play_beep(freq, duration);
+            }
+            break;
+        case OP_GET_TIME:
+            if (cpu.pc < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                if (reg < 8) {
+                    time_t now = time(NULL);
+                    cpu.regs[reg] = (uint16_t)(now & 0xFFFF);
+                }
+            }
+            break;
+        case OP_RANDOM:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                uint16_t max = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                if (reg < 8) {
+                    cpu.regs[reg] = rand() % (max + 1);
+                }
             }
             break;
         case OP_SET_PIXEL:
@@ -981,6 +1131,29 @@ void execute_instruction(void) {
                         cpu.memory[addr] = cpu.regs[reg] & 0xFF;
                         cpu.memory[addr + 1] = (cpu.regs[reg] >> 8) & 0xFF;
                     }
+                }
+            }
+            break;
+        case OP_PUSH:
+            if (cpu.pc < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                if (reg < 8 && cpu.sp > 0) {
+                    cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp] = cpu.regs[reg] & 0xFF;
+                    cpu.sp--;
+                    cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp] = (cpu.regs[reg] >> 8) & 0xFF;
+                    cpu.sp--;
+                }
+            }
+            break;
+        case OP_POP:
+            if (cpu.pc < MEM_SIZE) {
+                uint8_t reg = cpu.memory[cpu.pc++];
+                if (reg < 8 && cpu.sp < STACK_SIZE - 1) {
+                    cpu.sp++;
+                    uint16_t val = cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp];
+                    cpu.sp++;
+                    val |= (cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp] << 8);
+                    cpu.regs[reg] = val;
                 }
             }
             break;
@@ -1024,6 +1197,16 @@ void execute_instruction(void) {
                 }
             }
             break;
+        case OP_MOD:
+            if (cpu.pc + 2 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src1 = cpu.memory[cpu.pc++];
+                uint8_t src2 = cpu.memory[cpu.pc++];
+                if (dst < 8 && src1 < 8 && src2 < 8 && cpu.regs[src2] != 0) {
+                    cpu.regs[dst] = cpu.regs[src1] % cpu.regs[src2];
+                }
+            }
+            break;
         case OP_AND:
             if (cpu.pc + 2 < MEM_SIZE) {
                 uint8_t dst = cpu.memory[cpu.pc++];
@@ -1060,6 +1243,24 @@ void execute_instruction(void) {
                 uint8_t src = cpu.memory[cpu.pc++];
                 if (dst < 8 && src < 8) {
                     cpu.regs[dst] = ~cpu.regs[src];
+                }
+            }
+            break;
+        case OP_SHL:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src = cpu.memory[cpu.pc++];
+                if (dst < 8 && src < 8) {
+                    cpu.regs[dst] = cpu.regs[dst] << cpu.regs[src];
+                }
+            }
+            break;
+        case OP_SHR:
+            if (cpu.pc + 1 < MEM_SIZE) {
+                uint8_t dst = cpu.memory[cpu.pc++];
+                uint8_t src = cpu.memory[cpu.pc++];
+                if (dst < 8 && src < 8) {
+                    cpu.regs[dst] = cpu.regs[dst] >> cpu.regs[src];
                 }
             }
             break;
@@ -1110,6 +1311,27 @@ void execute_instruction(void) {
                 if ((cpu.flags & 0x04) && addr < MEM_SIZE) cpu.pc = addr;
             }
             break;
+        case OP_CALL:
+            if (cpu.pc + 1 < MEM_SIZE && cpu.sp > 1) {
+                uint16_t addr = cpu.memory[cpu.pc++];
+                addr |= (cpu.memory[cpu.pc++] << 8);
+                // Push return address
+                cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp] = cpu.pc & 0xFF;
+                cpu.sp--;
+                cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp] = (cpu.pc >> 8) & 0xFF;
+                cpu.sp--;
+                if (addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
+        case OP_RET:
+            if (cpu.sp < STACK_SIZE - 1) {
+                cpu.sp++;
+                uint16_t addr = cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp];
+                cpu.sp++;
+                addr |= (cpu.memory[MEM_SIZE - STACK_SIZE + cpu.sp] << 8);
+                if (addr < MEM_SIZE) cpu.pc = addr;
+            }
+            break;
         case OP_READ_CHAR:
             if (cpu.pc < MEM_SIZE) {
                 uint8_t reg = cpu.memory[cpu.pc++];
@@ -1150,6 +1372,16 @@ void execute_instruction(void) {
                 }
             }
             break;
+        case OP_COPY_MEM:
+            if (cpu.pc + 5 < MEM_SIZE) {
+                uint16_t src = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t dst = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                uint16_t len = cpu.memory[cpu.pc++] | (cpu.memory[cpu.pc++] << 8);
+                if (src + len < MEM_SIZE && dst + len < MEM_SIZE) {
+                    memmove(&cpu.memory[dst], &cpu.memory[src], len);
+                }
+            }
+            break;
         default: {
             char msg[64];
             snprintf(msg, sizeof(msg), "Error: Unknown opcode 0x%02X\n", opcode);
@@ -1172,16 +1404,12 @@ void run_program(void) {
 void cmd_help(void) {
     screen.current_color = COLOR_BRIGHT_YELLOW;
     print_to_screen("\nAvailable commands:\n");
+    print_to_screen("===================\n");
+    
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\nFile Operations:\n");
     screen.current_color = COLOR_CYAN;
-    print_to_screen("  help           ");
-    screen.current_color = COLOR_WHITE;
-    print_to_screen("- Display this help message\n");
-    screen.current_color = COLOR_CYAN;
-    print_to_screen("  clear          ");
-    screen.current_color = COLOR_WHITE;
-    print_to_screen("- Clear the screen\n");
-    screen.current_color = COLOR_CYAN;
-    print_to_screen("  ls             ");
+    print_to_screen("  ls, dir        ");
     screen.current_color = COLOR_WHITE;
     print_to_screen("- List files in current directory\n");
     screen.current_color = COLOR_CYAN;
@@ -1201,9 +1429,32 @@ void cmd_help(void) {
     screen.current_color = COLOR_WHITE;
     print_to_screen("- Move/rename a file\n");
     screen.current_color = COLOR_CYAN;
+    print_to_screen("  touch <file>   ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Create empty file\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  hexdump <file> ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display hexadecimal dump\n");
+    
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\nSystem Commands:\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  help           ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display this help message\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  clear, cls     ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Clear the screen\n");
+    screen.current_color = COLOR_CYAN;
     print_to_screen("  echo <text>    ");
     screen.current_color = COLOR_WHITE;
     print_to_screen("- Print text to screen\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  sysinfo        ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display system information\n");
     screen.current_color = COLOR_CYAN;
     print_to_screen("  date           ");
     screen.current_color = COLOR_WHITE;
@@ -1217,19 +1468,42 @@ void cmd_help(void) {
     screen.current_color = COLOR_WHITE;
     print_to_screen("- Display memory information\n");
     screen.current_color = COLOR_CYAN;
-    print_to_screen("  run <file>     ");
-    screen.current_color = COLOR_WHITE;
-    print_to_screen("- Execute a binary program\n");
-    screen.current_color = COLOR_CYAN;
-    print_to_screen("  hexdump <file> ");
-    screen.current_color = COLOR_WHITE;
-    print_to_screen("- Display hexadecimal dump of file\n");
-    screen.current_color = COLOR_CYAN;
     print_to_screen("  history        ");
     screen.current_color = COLOR_WHITE;
     print_to_screen("- Show command history\n");
+    
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\nProgram Execution:\n");
     screen.current_color = COLOR_CYAN;
-    print_to_screen("  exit           ");
+    print_to_screen("  run <file>     ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Execute a binary program\n");
+    
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\nFun Commands:\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  banner <text>  ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Display large text banner\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  color <0-15>   ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Change terminal color\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  matrix         ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Matrix falling text effect\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  starfield      ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- Starfield animation\n");
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  about          ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("- About MicroComputer\n");
+    
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  exit, quit     ");
     screen.current_color = COLOR_WHITE;
     print_to_screen("- Exit the system\n");
     print_to_screen("\n");
@@ -1417,6 +1691,217 @@ void cmd_history(void) {
     print_to_screen("\n");
 }
 
+void cmd_sysinfo(void) {
+    char buffer[128];
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\n=== MicroComputer System Information ===\n\n");
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("System: ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("MicroOS v1.0\n");
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("CPU: ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("Virtual 16-bit RISC\n");
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("RAM: ");
+    screen.current_color = COLOR_WHITE;
+    snprintf(buffer, sizeof(buffer), "%d KB\n", MEM_SIZE / 1024);
+    print_to_screen(buffer);
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("Registers: ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("8 x 16-bit\n");
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("Display: ");
+    screen.current_color = COLOR_WHITE;
+    snprintf(buffer, sizeof(buffer), "%dx%d text, %dx%d graphics\n", 
+             SCREEN_WIDTH, SCREEN_HEIGHT, PIXEL_WIDTH, PIXEL_HEIGHT);
+    print_to_screen(buffer);
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("Colors: ");
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("16-color palette\n");
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("Files: ");
+    screen.current_color = COLOR_WHITE;
+    snprintf(buffer, sizeof(buffer), "%d loaded\n", fs.file_count);
+    print_to_screen(buffer);
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("Uptime: ");
+    screen.current_color = COLOR_WHITE;
+    time_t now = time(NULL);
+    time_t uptime = now - boot_time;
+    int hours = (int)(uptime / 3600);
+    int minutes = (int)((uptime % 3600) / 60);
+    snprintf(buffer, sizeof(buffer), "%dh %dm\n", hours, minutes);
+    print_to_screen(buffer);
+    
+    print_to_screen("\n");
+}
+
+void cmd_touch(const char *filename) {
+    if (write_file(filename, (uint8_t*)"", 0) == 0) {
+        screen.current_color = COLOR_BRIGHT_GREEN;
+        print_to_screen("File created.\n");
+        screen.current_color = COLOR_WHITE;
+        scan_filesystem();
+    } else {
+        screen.current_color = COLOR_BRIGHT_RED;
+        print_to_screen("Error: Could not create file\n");
+        screen.current_color = COLOR_WHITE;
+    }
+}
+
+void cmd_banner(const char *text) {
+    if (!text || strlen(text) == 0) {
+        print_to_screen("Usage: banner <text>\n");
+        return;
+    }
+    
+    print_to_screen("\n");
+    screen.current_color = COLOR_BRIGHT_YELLOW;
+    
+    // Top border
+    for (int i = 0; i < strlen(text) + 4; i++) print_to_screen("=");
+    print_to_screen("\n");
+    
+    // Text
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("  ");
+    print_to_screen(text);
+    print_to_screen("  \n");
+    
+    // Bottom border
+    screen.current_color = COLOR_BRIGHT_YELLOW;
+    for (int i = 0; i < strlen(text) + 4; i++) print_to_screen("=");
+    print_to_screen("\n\n");
+    
+    screen.current_color = COLOR_WHITE;
+}
+
+void cmd_color(const char *arg) {
+    if (!arg) {
+        print_to_screen("Current color codes:\n");
+        for (int i = 0; i < 16; i++) {
+            screen.current_color = i;
+            char buf[32];
+            snprintf(buf, sizeof(buf), "  %2d: Sample Text\n", i);
+            print_to_screen(buf);
+        }
+        screen.current_color = COLOR_WHITE;
+        return;
+    }
+    
+    int color = atoi(arg);
+    if (color >= 0 && color < 16) {
+        screen.current_color = color;
+        print_to_screen("Color changed.\n");
+    } else {
+        print_to_screen("Invalid color (0-15)\n");
+    }
+}
+
+void cmd_matrix(void) {
+    srand(time(NULL));
+    screen.current_color = COLOR_BRIGHT_GREEN;
+    
+    for (int frame = 0; frame < 100; frame++) {
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            if (rand() % 3 == 0) {
+                int y = rand() % SCREEN_HEIGHT;
+                screen.chars[y][x] = 33 + rand() % 94;
+                screen.colors[y][x] = COLOR_BRIGHT_GREEN;
+                screen.dirty = 1;
+            }
+        }
+        sleep_ms(30);
+    }
+    
+    screen.current_color = COLOR_WHITE;
+}
+
+void cmd_starfield(void) {
+    clear_pixels();
+    screen.pixel_mode = 1;
+    
+    typedef struct { int x, y, z; } Star;
+    Star stars[50];
+    
+    srand(time(NULL));
+    for (int i = 0; i < 50; i++) {
+        stars[i].x = (rand() % 320) - 160;
+        stars[i].y = (rand() % 200) - 100;
+        stars[i].z = rand() % 100 + 1;
+    }
+    
+    for (int frame = 0; frame < 200; frame++) {
+        clear_pixels();
+        
+        for (int i = 0; i < 50; i++) {
+            stars[i].z -= 2;
+            if (stars[i].z <= 0) {
+                stars[i].x = (rand() % 320) - 160;
+                stars[i].y = (rand() % 200) - 100;
+                stars[i].z = 100;
+            }
+            
+            int sx = 160 + (stars[i].x * 100) / stars[i].z;
+            int sy = 100 + (stars[i].y * 100) / stars[i].z;
+            
+            if (sx >= 0 && sx < PIXEL_WIDTH && sy >= 0 && sy < PIXEL_HEIGHT) {
+                set_pixel(sx, sy, 1);
+            }
+        }
+        
+        screen.dirty = 1;
+        sleep_ms(50);
+    }
+    
+    clear_screen_display();
+    screen.pixel_mode = 0;
+}
+
+void cmd_about(void) {
+    clear_screen_display();
+    screen.current_color = COLOR_BRIGHT_CYAN;
+    print_to_screen("\n\n");
+    print_to_screen("        ╔══════════════════════════════════════╗\n");
+    print_to_screen("        ║                                      ║\n");
+    print_to_screen("        ║     MicroComputer Emulator v1.0      ║\n");
+    print_to_screen("        ║                                      ║\n");
+    print_to_screen("        ╚══════════════════════════════════════╝\n\n");
+    
+    screen.current_color = COLOR_YELLOW;
+    print_to_screen("  A fantasy computer for learning and creativity\n\n");
+    
+    screen.current_color = COLOR_WHITE;
+    print_to_screen("  Features:\n");
+    screen.current_color = COLOR_GREEN;
+    print_to_screen("    • 64KB RAM with 8 registers\n");
+    print_to_screen("    • 80x25 text mode with 16 colors\n");
+    print_to_screen("    • 320x200 pixel graphics\n");
+    print_to_screen("    • Sound synthesis\n");
+    print_to_screen("    • Custom bytecode VM\n\n");
+    
+    screen.current_color = COLOR_CYAN;
+    print_to_screen("  Inspired by PICO-8, TIC-80, and retro computers\n");
+    print_to_screen("  Licensed under GPL-3.0\n\n");
+    
+    screen.current_color = COLOR_BRIGHT_WHITE;
+    print_to_screen("  Type 'help' for available commands\n\n");
+    
+    screen.current_color = COLOR_WHITE;
+}
+
 void print_prompt(void) {
     screen.current_color = COLOR_BRIGHT_GREEN;
     print_to_screen("$ ");
@@ -1456,16 +1941,39 @@ void shell_loop(void) {
         char *token = strtok(cmd, " ");
         if (!token) continue;
         
-        if (strcmp(token, "exit") == 0) {
+        if (strcmp(token, "exit") == 0 || strcmp(token, "quit") == 0) {
+            screen.current_color = COLOR_BRIGHT_YELLOW;
             print_to_screen("Goodbye!\n");
+            screen.current_color = COLOR_WHITE;
             sleep_us(500000);
             break;
         } else if (strcmp(token, "help") == 0) {
             cmd_help();
-        } else if (strcmp(token, "clear") == 0) {
+        } else if (strcmp(token, "clear") == 0 || strcmp(token, "cls") == 0) {
             clear_screen_display();
-        } else if (strcmp(token, "ls") == 0) {
+        } else if (strcmp(token, "ls") == 0 || strcmp(token, "dir") == 0) {
             cmd_ls();
+        } else if (strcmp(token, "sysinfo") == 0) {
+            cmd_sysinfo();
+        } else if (strcmp(token, "touch") == 0) {
+            char *filename = strtok(NULL, " ");
+            if (filename) {
+                cmd_touch(filename);
+            } else {
+                print_to_screen("Usage: touch <filename>\n");
+            }
+        } else if (strcmp(token, "banner") == 0) {
+            char *text = strtok(NULL, "");
+            cmd_banner(text);
+        } else if (strcmp(token, "color") == 0) {
+            char *arg = strtok(NULL, " ");
+            cmd_color(arg);
+        } else if (strcmp(token, "matrix") == 0) {
+            cmd_matrix();
+        } else if (strcmp(token, "starfield") == 0) {
+            cmd_starfield();
+        } else if (strcmp(token, "about") == 0) {
+            cmd_about();
         } else if (strcmp(token, "cat") == 0) {
             char *filename = strtok(NULL, " ");
             if (filename) {
@@ -1535,9 +2043,13 @@ void shell_loop(void) {
                 print_to_screen("Usage: run <filename>\n");
             }
         } else {
+            screen.current_color = COLOR_BRIGHT_RED;
             print_to_screen("Unknown command: ");
             print_to_screen(token);
             print_to_screen("\n");
+            screen.current_color = COLOR_YELLOW;
+            print_to_screen("Type 'help' for available commands.\n");
+            screen.current_color = COLOR_WHITE;
         }
     }
 }
@@ -1551,6 +2063,7 @@ int main(int argc, char *argv[]) {
     WSAStartup(MAKEWORD(2,2), &wsa);
 #endif
     
+    srand(time(NULL));
     boot_time = time(NULL);
     
     pthread_mutex_init(&input_buf.mutex, NULL);
@@ -1564,8 +2077,8 @@ int main(int argc, char *argv[]) {
     init_filesystem();
     init_cpu();
     
-    printf("MicroComputer Emulator\n");
-    printf("======================\n");
+    printf("MicroComputer Emulator v1.0\n");
+    printf("===========================\n");
     printf("Filesystem: %s\n", fs.root_dir);
     printf("Loading files...\n");
     scan_filesystem();
